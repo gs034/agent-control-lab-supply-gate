@@ -1,7 +1,7 @@
 # Agent-supply integrity threat model
 
 Public, short model for the **agent-supply integrity** plane in Agent Control Lab.
-This repository is a host-side, fail-closed **existence-proof stub**. Brand: Agent Control Lab only.
+This repository is a host-side, fail-closed **existence-proof gate** (v0.2 foundation). Brand: Agent Control Lab only.
 
 Apache-2.0. See `LICENSE`.
 
@@ -13,7 +13,8 @@ Assets:
 
 - the materialised tree (post-checkout working copy / artefact)
 - the pin binding (`expected_sha`, optional `ref`)
-- the origin allowlist (exact string match)
+- the origin allowlist (exact string match; host config)
+- the fail-closed update policy (`pin_and_verify` only)
 - the host-resolved post-checkout HEAD (artefact digest)
 
 A listing, marketplace host, model, monitor, or MCP server does not sit inside this trust domain.
@@ -54,13 +55,14 @@ Existence-proof DENY only. This document does not claim an attack-success-rate.
 | --- | --- | --- |
 | Pin | `expected_sha` must be a full digest; short / missing / ill-typed pin is invalid | `envelope_invalid` → DENY |
 | Optional ref | `ref` may be present; it is not policy | never substitutes for HEAD |
-| Origin allowlist | exact string match only | `origin_not_allowlisted` → DENY |
+| Origin allowlist | exact string match only; empty/broken config is not allow-all | `origin_not_allowlisted` or `allowlist_invalid` → DENY |
+| Update policy | adapter path requires `pin_and_verify`; weak modes rejected | `update_policy_rejected` → DENY |
 | Post-checkout HEAD verify | observed HEAD present, well-formed, and equal to the pin | `verify_missing` or `head_mismatch` → DENY |
 | Prose is data | listing/agent text is never policy | structured waive → `prose_rejected_as_policy`; verify still runs |
 | Kill | host kill switch (`kill_active` or `ACL_SUPPLY_GATE_KILL`) | `kill_active` → DENY |
 | Fault wrapper | unexpected gate exception | `safe_evaluate` → DENY (`kill_active`) |
 
-ALLOW only when the envelope parses, origin is allowlisted, kill is off, observed HEAD is present, and that HEAD exactly matches the pin. Any other outcome is DENY with a deterministic host JSON receipt.
+ALLOW only when the envelope parses, origin is allowlisted, kill is off, update policy is accepted where required, observed HEAD is present, and that HEAD exactly matches the pin. Any other outcome is DENY with a deterministic host JSON receipt.
 
 ## Fail-closed
 
@@ -72,6 +74,8 @@ There is no path where untrusted prose installs without verify. If the caller om
 - Not a production marketplace integration, live git-host adapter, or production UI.
 - Not a monitor, MCP policy engine, or model-trust layer.
 - Not an attack-success-rate scoreboard.
-- Existence-proof stub only. Default allowlist hosts are `*.example.invalid`.
+- Existence-proof gate. Default allowlist hosts are `*.example.invalid`.
+- Thin installer adapters are stub interfaces only.
 
-See `SECURITY.md` for the reporting path and `README.md` for the host call shape.
+See `docs/adr/ADR-0001-lab-supply-gate-architecture.md`, `docs/ROADMAP.md`,
+`SECURITY.md`, and `README.md` for the host call shape.

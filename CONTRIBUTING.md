@@ -2,7 +2,7 @@
 
 **Agent Control Lab** only. Apache-2.0. See `LICENSE`.
 
-This repository accepts **Lab-only** artefacts: the host-side agent-supply integrity gate stub, its public threat model, and the Plugin4Shell-class existence-proof row.
+This repository accepts **Lab-only** artefacts: the host-side agent-supply integrity gate, its ADR / roadmap / threat model, allowlist and update-policy modules, thin installer adapter stubs, and the Plugin4Shell-class existence-proof row.
 
 ## Rejected
 
@@ -20,7 +20,7 @@ The threat-pattern name **Plugin4Shell-class** (already used under `eval/plugin4
 - Brand: **Agent Control Lab** only.
 - Licence stays Apache-2.0. Do not relicense.
 - Branch names and commit subjects must pass the same Lab-only check as the tree.
-- Read `docs/threat-model.md`, `SECURITY.md`, and the architecture / **Non-goals** sections in `README.md` before changing behaviour.
+- Read `docs/adr/ADR-0001-lab-supply-gate-architecture.md`, `docs/ROADMAP.md`, `docs/threat-model.md`, `SECURITY.md`, and the architecture / **Non-goals** sections in `README.md` before changing behaviour.
 
 ## Checks
 
