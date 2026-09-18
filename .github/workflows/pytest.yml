@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+name: pytest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Run tests
+        run: python -m pytest
+      - name: Plugin4Shell-class fail-closed demo
+        run: |
+          set +e
+          python -m supply_gate.demo > "${RUNNER_TEMP}/deny_receipt.json"
+          code=$?
+          set -e
+          test "${code}" -eq 1
+          grep -q '"decision": "DENY"' "${RUNNER_TEMP}/deny_receipt.json"
