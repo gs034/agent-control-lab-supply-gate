@@ -1,6 +1,6 @@
 # Agent Control Lab — supply integrity gate
 
-**BLUF:** Host-side, fail-closed gate for agent/plugin/skill **install or update**. Pin an expected SHA (optional ref), allowlist the origin, then **verify post-checkout HEAD** against the pin. Mismatch, missing verify, non-allowlisted origin, parse error, or kill → **DENY** with a deterministic receipt. Marketplace/agent prose is untrusted data and **cannot skip verify**.
+Host-side, fail-closed gate for agent/plugin/skill **install or update**. Pin an expected SHA (optional ref), allowlist the origin, then **verify post-checkout HEAD** against the pin. Mismatch, missing verify, non-allowlisted origin, parse error, or kill → **DENY** with a deterministic receipt. Marketplace/agent prose is untrusted data and **cannot skip verify**.
 
 Philanthropic public goods / Navigators artefact. **Not** a commercial SKU. Brand: **Agent Control Lab** only.
 
