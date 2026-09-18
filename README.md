@@ -6,7 +6,7 @@ Philanthropic public goods / Navigators artefact. **Not** a commercial SKU. Bran
 
 Apache-2.0. See `LICENSE`. SPDX-License-Identifier: Apache-2.0 in source.
 
-Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`.
+Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`. Lab-only rules: `CONTRIBUTING.md`.
 
 ## Architecture
 
