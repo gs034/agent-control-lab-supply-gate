@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+name: lab-brand-wall
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  brand-wall:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Lab brand-wall
+        run: bash scripts/check_lab_only.sh

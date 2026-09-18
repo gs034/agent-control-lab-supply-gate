@@ -4,14 +4,17 @@
 
 This repository accepts **Lab-only** artefacts: the host-side agent-supply integrity gate stub, its public threat model, and the Plugin4Shell-class existence-proof row.
 
-## Rejected
+## Keep-out
 
-- Commercial SKUs, bank product paths, and vendor / bank brand strings.
-- Copies of commercial or bank source trees, adapters, or UI.
+Accept Lab artefacts only. Reject:
+
+- Commercial SKUs, bank product trees, and vendor / bank brand strings (including spaced or concatenated forms and SKU wording).
+- Commercial or bank directory prefixes and copies of those source trees.
+- Provenance / assignment language that marks the tree as a commercial successor or imported product line.
 - Marketplace integrations, live git-host clients, production UI, or attack-success-rate claims.
 - Weakening fail-closed `evaluate()` / `safe_evaluate()`.
 
-Brand tokens are enforced by `scripts/check_lab_only.sh` (ripgrep over the checkout, path names, branch name, and commit subjects/bodies). A hit **fails CI**. The script reconstructs the token list at runtime so the tree does not store those brands as literals.
+The brand-wall is `scripts/check_lab_only.sh` via `.github/workflows/lab-brand-wall.yml` (also `.github/workflows/lab-only.yml`). It runs `rg -n -i` with `-w` on short / ambiguous tokens, over checkout contents, path names, branch name, and commit subjects/bodies. A hit **fails CI**. Tokens are reconstructed at runtime so the tree does not store those brands as literals.
 
 The threat-pattern name **Plugin4Shell-class** (already used under `eval/plugin4shell_class/`) is allowed. It is not a vendor product.
 
