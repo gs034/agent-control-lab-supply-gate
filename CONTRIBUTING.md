@@ -11,7 +11,7 @@ This repository accepts **Lab-only** artefacts: the host-side agent-supply integ
 - Marketplace integrations, live git-host clients, production UI, or attack-success-rate claims.
 - Weakening fail-closed `evaluate()` / `safe_evaluate()`.
 
-Brand tokens are enforced by `scripts/check_lab_only.sh` (ripgrep over the checkout, path names, branch name, and commit subjects/bodies). A hit **fails CI**. The script reconstructs the token list at runtime so the tree does not store those brands as literals.
+Brand tokens are enforced by the Lab-only keep-out wall: `scripts/lab_brand_wall.py` (stdlib Python; no ripgrep) and the wrapper `scripts/check_lab_only.sh`. CI jobs `lab-only` / `forbidden-tokens` and `lab-brand-wall` / `wall` fail the PR on a hit. The keep-out list is packed at runtime so the tree does not store those brands as literals.
 
 The threat-pattern name **Plugin4Shell-class** (already used under `eval/plugin4shell_class/`) is allowed. It is not a vendor product.
 
@@ -25,9 +25,12 @@ The threat-pattern name **Plugin4Shell-class** (already used under `eval/plugin4
 ## Checks
 
 ```bash
-bash scripts/check_lab_only.sh
 python -m pytest
 python -m supply_gate.demo
+bash scripts/check_lab_only.sh
+python3 scripts/lab_brand_wall.py
 ```
+
+The Lab-only keep-out is stdlib Python (`scripts/lab_brand_wall.py`; `scripts/check_lab_only.sh` is a wrapper). Ripgrep is not required.
 
 Vulnerability reports: `SECURITY.md` (GitHub Security Advisories only).
