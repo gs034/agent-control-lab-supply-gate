@@ -6,9 +6,15 @@ Philanthropic public goods / Navigators artefact. **Not** a commercial SKU. Bran
 
 Apache-2.0. See `LICENSE`. SPDX-License-Identifier: Apache-2.0 in source.
 
-## What this is (and is not)
+Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`.
 
-This is a **greenfield stub** that demonstrates a diligence-hard control:
+## Architecture
+
+The host is the policy point. A caller that is about to install or update an agent, plugin, or skill builds a structured `SupplyEnvelope` (allowlisted origin, expected SHA pin, optional ref), materialises the artefact, resolves post-checkout HEAD (or artefact digest), and calls `evaluate`. The gate ALLOW only when the envelope is well-formed, the origin is on the host allowlist, kill is off, observed HEAD is a full digest, and that HEAD equals the pin. Marketplace or agent prose is untrusted data: it cannot skip verify, and a structured waive is recorded as `prose_rejected_as_policy` while verify still runs. The trust domain is this host check; it does not inherit trust from a model, a monitor, an MCP server, or a marketplace host.
+
+## What this is
+
+Greenfield stub that demonstrates a diligence-hard control:
 
 1. **Pin** — envelope carries `expected_sha` and optional `ref`.
 2. **Allowlisted origin** — exact match to a host allowlist (git remote / package source).
@@ -16,13 +22,12 @@ This is a **greenfield stub** that demonstrates a diligence-hard control:
 4. **Fail-closed** — never proceed to install/use on deny.
 5. **No model judge** — receipts are host JSON. Untrusted prose is not policy.
 
-This is **not**:
+## Non-goals
 
-- a production marketplace integration
-- a commercial product
-- “trust the marketplace pin alone”
-- an LLM monitor or judge
-- an attack-success-rate (ASR) scoreboard
+- Not an LLM, chain-of-thought, or transcript judge.
+- Not a production marketplace integration, live git-host adapter, or production UI.
+- Not a commercial product and not “trust the marketplace pin alone.”
+- Existence-proof stub only. Plugin4Shell-class is a threat-pattern DENY row, not an attack-success-rate claim.
 
 ## Fail-closed check (Plugin4Shell-class)
 
