@@ -7,8 +7,9 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from supply_gate.allowlist import AllowlistError, load_allowlist
 from supply_gate.envelope import SupplyEnvelope, envelope_digest_ok
-from supply_gate.origins import DEFAULT_ALLOWED_ORIGINS, origin_allowlisted
+from supply_gate.origins import origin_allowlisted
 from supply_gate.reasons import REASON_ORDER, DenyReason, Verdict
 from supply_gate.receipt import build_receipt
 
@@ -33,12 +34,14 @@ def evaluate(
     allowed_origins: frozenset[str] | None = None,
     kill_active: bool | None = None,
     untrusted_prose: str | None = None,
+    extra_reasons: tuple[DenyReason, ...] = (),
 ) -> Decision:
     """Host-side gate. Marketplace/agent prose is untrusted data and cannot skip verify.
 
     ALLOW only when the envelope parses, origin is allowlisted, kill is off,
     observed HEAD is present, and that HEAD exactly matches the pinned digest.
-    Any other outcome is DENY with a receipt.
+    Host extra reasons (update policy, broken allowlist) are folded into the
+    receipt. Any other outcome is DENY with a receipt.
     """
     skip_attempt = False
     parsed: SupplyEnvelope | None
@@ -71,8 +74,13 @@ def evaluate(
     ref = parsed.ref if parsed else _mapping_str(envelope, "ref")
     capability = parsed.capability if parsed else _mapping_str(envelope, "capability")
 
+    if extra_reasons:
+        reasons.extend(extra_reasons)
+
     if parsed is not None:
-        allowed = DEFAULT_ALLOWED_ORIGINS if allowed_origins is None else allowed_origins
+        allowed, allowlist_ok = _resolve_allowed_origins(allowed_origins)
+        if not allowlist_ok:
+            reasons.append(DenyReason.ALLOWLIST_INVALID)
         if not origin_allowlisted(parsed.origin, allowed):
             reasons.append(DenyReason.ORIGIN_NOT_ALLOWLISTED)
 
@@ -126,6 +134,17 @@ def safe_evaluate(
             skip_verify_attempt=False,
         )
         return Decision(verdict=Verdict.DENY, reasons=(DenyReason.KILL_ACTIVE,), receipt=receipt)
+
+
+def _resolve_allowed_origins(
+    allowed_origins: frozenset[str] | None,
+) -> tuple[frozenset[str], bool]:
+    if allowed_origins is not None:
+        return allowed_origins, True
+    try:
+        return load_allowlist().origins, True
+    except AllowlistError:
+        return frozenset(), False
 
 
 def _kill_active(explicit: bool | None) -> bool:

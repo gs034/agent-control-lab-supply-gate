@@ -4,13 +4,13 @@ Agent Control Lab host-side **agent-supply integrity** gate. Fail-closed stub. A
 
 ## Fail-closed
 
-The gate DENY when any required check is missing or fails: invalid envelope, origin not allowlisted, missing or ill-formed post-checkout HEAD, HEAD ≠ pin, host kill, structured skip-verify attempt, or unexpected gate fault (`safe_evaluate`). Marketplace or agent prose is untrusted data and **cannot skip verify**.
+The gate DENY when any required check is missing or fails: invalid envelope, origin not allowlisted, broken/empty allowlist, rejected update policy, missing or ill-formed post-checkout HEAD, HEAD ≠ pin, host kill, structured skip-verify attempt, or unexpected gate fault (`safe_evaluate`). Marketplace or agent prose is untrusted data and **cannot skip verify**.
 
 There is no “trust the advertised pin alone” path.
 
 ## Trust domain
 
-Policy is host-side only: pin (`expected_sha`, optional `ref`), exact-match origin allowlist, and post-checkout HEAD verify.
+Policy is host-side only: pin (`expected_sha`, optional `ref`), exact-match origin allowlist, fail-closed update policy (`pin_and_verify`), and post-checkout HEAD verify.
 
 This trust domain is **independent** of:
 
@@ -37,4 +37,4 @@ Please include: gate version / commit, envelope shape (redact secrets), observed
 
 ## Supported versions
 
-This is an existence-proof stub on `main`. Security reports should target current `main`.
+This is an existence-proof gate on `main`. Security reports should target current `main`.

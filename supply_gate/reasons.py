@@ -18,6 +18,8 @@ class DenyReason(str, Enum):
     KILL_ACTIVE = "kill_active"
     PROSE_REJECTED_AS_POLICY = "prose_rejected_as_policy"
     ORIGIN_NOT_ALLOWLISTED = "origin_not_allowlisted"
+    ALLOWLIST_INVALID = "allowlist_invalid"
+    UPDATE_POLICY_REJECTED = "update_policy_rejected"
     VERIFY_MISSING = "verify_missing"
     HEAD_MISMATCH = "head_mismatch"
 

@@ -1,0 +1,6 @@
+{
+  "origins": [
+    "https://git.example.invalid/marketplace/community-plugins.git",
+    "https://git.example.invalid/agent-control-lab/skills.git"
+  ]
+}
