@@ -3,9 +3,11 @@
 
 from supply_gate.adapters import (
     InstallerAdapter,
+    LocalWorktreeAdapter,
     MaterialiseRequest,
     MaterialiseResult,
     RecordingStubAdapter,
+    caller_supplied_head,
     gated_install_or_update,
 )
 from supply_gate.allowlist import AllowlistConfig, AllowlistError, load_allowlist
@@ -20,6 +22,7 @@ __all__ = [
     "Decision",
     "DenyReason",
     "InstallerAdapter",
+    "LocalWorktreeAdapter",
     "MaterialiseRequest",
     "MaterialiseResult",
     "RecordingStubAdapter",
@@ -27,6 +30,7 @@ __all__ = [
     "UpdatePolicy",
     "UpdatePolicyError",
     "Verdict",
+    "caller_supplied_head",
     "evaluate",
     "gated_install_or_update",
     "load_allowlist",

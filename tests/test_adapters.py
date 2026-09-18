@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from supply_gate.adapters import RecordingStubAdapter, gated_install_or_update
+from supply_gate.adapters import (
+    LocalWorktreeAdapter,
+    RecordingStubAdapter,
+    caller_supplied_head,
+    gated_install_or_update,
+)
 from supply_gate.allowlist import load_allowlist
 from supply_gate.demo import load_plugin4shell_class_inputs
 from supply_gate.gate import evaluate
@@ -111,6 +116,84 @@ def test_broken_allowlist_on_evaluate_is_deny(tmp_path: Path, monkeypatch: pytes
 def test_example_allowlist_file_loads() -> None:
     loaded = load_allowlist(path=ROOT / "config" / "allowlist.example.json", use_env=False)
     assert ORIGIN_OK in loaded.origins
+
+
+def test_update_policy_loaded_from_host_file() -> None:
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy_path=ROOT / "config" / "update_policy.example.json",
+    )
+    assert decision.verdict is Verdict.ALLOW
+
+
+def test_broken_update_policy_file_denies(tmp_path: Path) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text("{not-json\n", encoding="utf-8")
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy_path=path,
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.UPDATE_POLICY_REJECTED in decision.reasons
+
+
+def test_empty_update_policy_file_denies(tmp_path: Path) -> None:
+    path = tmp_path / "empty.json"
+    path.write_text("\n", encoding="utf-8")
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy_path=path,
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.UPDATE_POLICY_REJECTED in decision.reasons
+
+
+def test_unreadable_allowlist_path_denies(tmp_path: Path) -> None:
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        allowlist_path=tmp_path / "missing.json",
+        update_policy=UpdatePolicy.fail_closed_default(),
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.ALLOWLIST_INVALID in decision.reasons
+
+
+def test_local_worktree_uses_caller_digest_only(tmp_path: Path) -> None:
+    worktree = tmp_path / "tree"
+    worktree.mkdir()
+    (worktree / "HEAD").write_text("should-not-be-read\n", encoding="utf-8")
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        LocalWorktreeAdapter(PIN, worktree=worktree),
+        update_policy=UpdatePolicy.fail_closed_default(),
+    )
+    assert decision.verdict is Verdict.ALLOW
+    assert decision.receipt["observed_head"] == PIN
+
+
+def test_local_worktree_missing_tree_is_verify_missing(tmp_path: Path) -> None:
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        LocalWorktreeAdapter(PIN, worktree=tmp_path / "absent"),
+        update_policy=UpdatePolicy.fail_closed_default(),
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.VERIFY_MISSING in decision.reasons
+
+
+def test_local_worktree_remote_shaped_path_is_verify_missing() -> None:
+    assert caller_supplied_head(PIN, worktree="https://git.example.invalid/tree") is None
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        LocalWorktreeAdapter(PIN, worktree="https://git.example.invalid/tree"),
+        update_policy=UpdatePolicy.fail_closed_default(),
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.VERIFY_MISSING in decision.reasons
 
 
 def test_adapter_does_not_change_official_evaluate_receipt() -> None:

@@ -44,10 +44,11 @@ class UpdatePolicyError(ValueError):
 @dataclass(frozen=True)
 class UpdatePolicy:
     mode: str = PIN_AND_VERIFY
+    source: str = "default"
 
     @classmethod
     def fail_closed_default(cls) -> UpdatePolicy:
-        return cls(mode=PIN_AND_VERIFY)
+        return cls(mode=PIN_AND_VERIFY, source="default")
 
     def accepted(self) -> bool:
         return self.mode == PIN_AND_VERIFY
@@ -56,55 +57,81 @@ class UpdatePolicy:
 def load_update_policy(
     *,
     path: str | Path | None = None,
+    mode: str | None = None,
     raw: Mapping[str, Any] | None = None,
     use_env: bool = True,
     fallback_default: bool = True,
 ) -> tuple[UpdatePolicy | None, bool]:
-    """Load an update policy.
+    """Load an update policy the same way origins load.
+
+    Precedence: explicit ``mode``, then ``raw``, then ``path``, then
+    ``ACL_SUPPLY_GATE_UPDATE_POLICY``, then the fail-closed default.
 
     Returns ``(policy_or_none, weak_attempt)``.
     ``weak_attempt`` is True when the mapping names a weak mode or waive flag.
 
-    File / env parse errors raise ``UpdatePolicyError``.
+    An empty or ill-formed file raises ``UpdatePolicyError``. A provided
+    mapping with no mode is empty (callers must DENY). There is no
+    implicit allow-all or weak-mode fallback.
     """
+    if mode is not None:
+        return parse_update_policy({"mode": mode}, source="explicit")
     if raw is not None:
-        return parse_update_policy(raw)
+        return parse_update_policy(raw, source="mapping")
     resolved = Path(path) if path is not None else None
+    source = "file"
     if resolved is None and use_env:
         env_path = os.environ.get(UPDATE_POLICY_ENV, "").strip()
         if env_path:
             resolved = Path(env_path)
+            source = "env"
     if resolved is not None:
-        try:
-            text = resolved.read_text(encoding="utf-8")
-            parsed = json.loads(text)
-        except (OSError, json.JSONDecodeError) as exc:
-            raise UpdatePolicyError("update policy file unreadable or ill-formed") from exc
-        if not isinstance(parsed, Mapping):
-            raise UpdatePolicyError("update policy JSON must be an object")
-        return parse_update_policy(parsed)
+        return parse_update_policy(_mapping_from_file(resolved), source=source)
     if fallback_default:
         return UpdatePolicy.fail_closed_default(), False
     return None, False
 
 
-def parse_update_policy(raw: Mapping[str, Any] | None) -> tuple[UpdatePolicy | None, bool]:
+def parse_update_policy(
+    raw: Mapping[str, Any] | None,
+    *,
+    source: str = "mapping",
+) -> tuple[UpdatePolicy | None, bool]:
     """Parse a mapping into an update policy.
 
-    Returns ``(policy_or_none, weak_attempt)``.
+    Returns ``(policy_or_none, weak_attempt)``. A provided mapping with no
+    mode is empty and fail-closed (not an implicit ``pin_and_verify``).
     """
     if raw is None:
         return None, False
     weak = _weak_flags(raw)
     mode = raw.get("mode")
     if mode is None:
-        return UpdatePolicy.fail_closed_default(), weak
+        return None, True
     if not isinstance(mode, str) or not mode.strip():
         return None, True
     normalised = mode.strip()
     if normalised in _WEAK_MODES or normalised != PIN_AND_VERIFY:
-        return UpdatePolicy(mode=normalised), True
-    return UpdatePolicy(mode=PIN_AND_VERIFY), weak
+        return UpdatePolicy(mode=normalised, source=source), True
+    return UpdatePolicy(mode=PIN_AND_VERIFY, source=source), weak
+
+
+def _mapping_from_file(path: Path) -> Mapping[str, Any]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise UpdatePolicyError(f"update policy file unreadable: {path}") from exc
+    if not text.strip():
+        raise UpdatePolicyError("update policy file is empty")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise UpdatePolicyError("update policy JSON is ill-formed") from exc
+    if not isinstance(parsed, Mapping):
+        raise UpdatePolicyError("update policy JSON must be an object")
+    if "mode" not in parsed and not _weak_flags(parsed):
+        raise UpdatePolicyError("update policy is empty")
+    return parsed
 
 
 def infer_operation(envelope: Mapping[str, Any] | None, capability: str | None) -> str:

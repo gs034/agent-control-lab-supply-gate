@@ -68,6 +68,57 @@ def test_ill_typed_mode_rejected() -> None:
     assert weak is True
 
 
+def test_empty_mapping_is_not_implicit_pin_and_verify() -> None:
+    policy, weak = parse_update_policy({})
+    assert policy is None
+    assert weak is True
+    assert evaluate_update_policy(policy, weak_attempt=weak, required=True) == (
+        DenyReason.UPDATE_POLICY_REJECTED,
+    )
+
+
+def test_explicit_mode_load() -> None:
+    policy, weak = load_update_policy(mode=PIN_AND_VERIFY, use_env=False)
+    assert weak is False
+    assert policy is not None
+    assert policy.accepted()
+    assert policy.source == "explicit"
+
+
+def test_empty_file_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "empty.json"
+    path.write_text("\n", encoding="utf-8")
+    with pytest.raises(UpdatePolicyError, match="empty"):
+        load_update_policy(path=path, use_env=False)
+
+
+def test_empty_object_file_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "empty-object.json"
+    path.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(UpdatePolicyError, match="empty"):
+        load_update_policy(path=path, use_env=False)
+
+
+def test_env_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / "from-env.json"
+    path.write_text('{"mode": "pin_and_verify"}\n', encoding="utf-8")
+    monkeypatch.setenv("ACL_SUPPLY_GATE_UPDATE_POLICY", str(path))
+    policy, weak = load_update_policy()
+    assert weak is False
+    assert policy is not None
+    assert policy.accepted()
+    assert policy.source == "env"
+
+
+def test_no_fallback_without_config_fail_closed() -> None:
+    policy, weak = load_update_policy(use_env=False, fallback_default=False)
+    assert policy is None
+    assert weak is False
+    assert evaluate_update_policy(policy, required=True) == (
+        DenyReason.UPDATE_POLICY_REJECTED,
+    )
+
+
 def test_infer_operation_from_capability_language() -> None:
     assert infer_operation({"capability": "plugin.install_or_update"}, None) == "update"
     assert infer_operation({"capability": "skill.fetch"}, None) == "install"
