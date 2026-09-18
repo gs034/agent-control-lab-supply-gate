@@ -15,8 +15,8 @@ row. Later Lab cuts stay inside that same capability.
 | Lab cut | What the host can prove | EOI M1b mapping |
 | --- | --- | --- |
 | **stub (v0.1)** | `evaluate()` ALLOW only on pin + allowlisted origin + HEAD match. Plugin4Shell-class eval row is a deterministic DENY. Marketplace prose cannot skip verify. | M1b existence-proof: a host DENY receipt for the published threat pattern. |
-| **v0.2 foundation** (this cut) | Architecture pinned in `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Allowlist is a loadable host config (fail-closed on empty/broken). Update policy is fail-closed `pin_and_verify`. Thin installer adapter **stub interfaces** exist; no live marketplace. Demo DENY row unchanged. | M1b architecture and host policy surfaces named. The install/update capability is specified, not only demonstrated. |
-| **v1** | Adapter path is the documented host call: local materialise → HEAD → `evaluate`, with policy file load and additional DENY rows (broken allowlist, rejected update mode, omitted HEAD from the adapter). Still no live marketplace requirement. | M1b complete for this plane: pin, origin allowlist, HEAD verify, and fail-closed update are one host capability with recorded receipts. |
+| **v0.2 foundation** | Architecture pinned in `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Allowlist is a loadable host config (fail-closed on empty/broken). Update policy is fail-closed `pin_and_verify`. Thin installer adapter **stub interfaces** exist; no live marketplace. Demo DENY row unchanged. | M1b architecture and host policy surfaces named. The install/update capability is specified, not only demonstrated. |
+| **v0.3 / v1** (this cut) | Adapter path is the documented host call: load allowlist and update policy from host config (file/env; empty/broken → DENY) → local materialise → HEAD → `evaluate`. Additional DENY rows: omitted adapter HEAD, unreadable allowlist, `trust_ref` / `auto_latest` rejected. Optional local-worktree helper takes a caller-supplied digest only. Still no live marketplace. Demo DENY row unchanged. | M1b complete for this plane: pin, origin allowlist, HEAD verify, and fail-closed update are one host capability with recorded receipts. |
 
 ## Stub (v0.1) — done on `main`
 
@@ -27,7 +27,7 @@ row. Later Lab cuts stay inside that same capability.
 - Plugin4Shell-class fixtures under `eval/plugin4shell_class/`.
 - `python -m supply_gate.demo` exits 1 with the DENY receipt.
 
-## v0.2 foundation — this cut
+## v0.2 foundation — done on `main`
 
 - ADR-0001: pin, allowlisted origins, HEAD verify, fail-closed update policy,
   Plugin4Shell-class, capability language.
@@ -40,15 +40,19 @@ row. Later Lab cuts stay inside that same capability.
 - README points at the ADR and this map. Demo and official eval row stay
   fail-closed DENY.
 
-## v1 — next Lab cut (not this PR)
+## v0.3 / v1 — this cut (M1b complete for this plane)
 
-- Keep the same capability. Do not add a live marketplace or git-host client
-  as a requirement.
-- Load update policy from host config the same way origins load.
-- More existence-proof rows: omitted adapter HEAD, unreadable allowlist,
-  `trust_ref` / `auto_latest` rejected on update.
-- Optional local-worktree HEAD helper that still takes the observed digest
-  from the caller — not a network install.
+- Update policy loads from host config the same way origins load: explicit
+  mode, mapping, JSON file, or `ACL_SUPPLY_GATE_UPDATE_POLICY`. Empty or
+  broken config → DENY. No-config fallback remains fail-closed
+  `pin_and_verify`.
+- `gated_install_or_update` accepts `update_policy_path` and `allowlist_path`.
+- Existence-proof rows under `eval/`: `omitted_adapter_head`,
+  `unreadable_allowlist`, `trust_ref_rejected`, `auto_latest_rejected`.
+- Optional `LocalWorktreeAdapter` / `caller_supplied_head`: caller supplies
+  the digest. The helper does not fetch, run git, or read HEAD from the tree.
+- Official Plugin4Shell-class demo path is unchanged DENY. Adapter stubs stay
+  non-live.
 
 ## Out of scope for every cut on this map
 
@@ -57,5 +61,6 @@ row. Later Lab cuts stay inside that same capability.
 - Attack-success-rate claims.
 - Monorepo merge with the Lab PEP repository.
 - Commercial SKU branding.
+- Live marketplace or network install.
 
 Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`.

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-18
+- Updated: 2026-09-18 (v0.3 / M1b host-config load and local-worktree helper)
 - Brand: Agent Control Lab
 - Licence: Apache-2.0
 - Plane: agent-supply integrity (host decision before install or update)
@@ -92,21 +93,35 @@ whitespace fail closed: the host cannot ALLOW an origin it cannot name.
 
 Exact string match only. No glob, no suffix, no “same host, different path.”
 
+## Update policy configuration
+
+Update policy is host configuration, loaded the same way as origins: an
+explicit mode, a JSON mapping, a JSON file, or
+`ACL_SUPPLY_GATE_UPDATE_POLICY`. If none of those are provided, the stub
+falls back to fail-closed `pin_and_verify`. An empty file, empty mapping,
+missing mode, unreadable path, or ill-formed JSON is DENY
+(`update_policy_rejected`). Weak modes (`trust_ref`, `auto_latest`,
+`marketplace_pin_only`) are never honoured.
+
 ## Installer adapters (stub interfaces)
 
 The host path is:
 
 1. Build a structured envelope (origin, pin, optional ref, caller, capability).
-2. Apply fail-closed update policy.
-3. Ask a thin **installer adapter** to materialise the artefact and return
+2. Load allowlist and update policy from host config (file/env). Empty or
+   broken config is DENY.
+3. Apply fail-closed update policy.
+4. Ask a thin **installer adapter** to materialise the artefact and return
    post-checkout HEAD.
-4. Call `evaluate`. If the adapter omitted HEAD, the gate returns
+5. Call `evaluate`. If the adapter omitted HEAD, the gate returns
    `verify_missing`.
 
-v0.2 ships **interfaces and an in-memory stub only**. No live marketplace,
-no live git-host client, and no production UI are required or implied. A
-later v1 cut may record HEAD from a local worktree without opening a network
-marketplace.
+v0.3 ships the same stub interfaces plus an optional **local-worktree**
+helper (`LocalWorktreeAdapter` / `caller_supplied_head`). The helper takes a
+caller-supplied digest only. It does not fetch, run git, or read HEAD from
+the tree. A missing or remote-shaped worktree path is omitted HEAD
+(`verify_missing`). No live marketplace, no live git-host client, and no
+production UI are required or implied.
 
 ## Fail-closed
 
@@ -138,4 +153,4 @@ Kill: `kill_active=True` or `ACL_SUPPLY_GATE_KILL=1`.
 - Receipts stay host JSON. Brand: Agent Control Lab only.
 
 See `docs/threat-model.md` for the control taxonomy, `docs/ROADMAP.md` for
-stub → v0.2 → v1 against EOI M1b, and `README.md` for the call shape.
+stub → v0.2 → v0.3 / v1 against EOI M1b, and `README.md` for the call shape.

@@ -1,0 +1,20 @@
+{
+  "brand": "Agent Control Lab",
+  "caller": "host.plugin_install",
+  "capability": "plugin.install_or_update",
+  "decision": "DENY",
+  "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "gate": "supply-integrity",
+  "kill_active": false,
+  "observed_head": null,
+  "origin": "https://git.example.invalid/marketplace/community-plugins.git",
+  "prose_used_as_policy": false,
+  "reasons": [
+    "verify_missing"
+  ],
+  "ref": "refs/heads/stable",
+  "schema_version": "1",
+  "skip_verify_attempt": false,
+  "untrusted_prose_present": false,
+  "verify_performed": false
+}

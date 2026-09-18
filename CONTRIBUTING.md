@@ -2,7 +2,7 @@
 
 **Agent Control Lab** only. Apache-2.0. See `LICENSE`.
 
-This repository accepts **Lab-only** artefacts: the host-side agent-supply integrity gate, its ADR / roadmap / threat model, allowlist and update-policy modules, thin installer adapter stubs, and the Plugin4Shell-class existence-proof row.
+This repository accepts **Lab-only** artefacts: the host-side agent-supply integrity gate, its ADR / roadmap / threat model, allowlist and update-policy modules, thin installer adapter stubs (including the optional local-worktree helper), the Plugin4Shell-class existence-proof row, and the additional host-path DENY rows under `eval/`.
 
 ## Rejected
 
