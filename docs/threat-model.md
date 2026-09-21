@@ -1,7 +1,7 @@
 # Agent-supply integrity threat model
 
 Public, short model for the **agent-supply integrity** plane in Agent Control Lab.
-This repository is a host-side, fail-closed **existence-proof gate** (v0.3 / M1b). Brand: Agent Control Lab only.
+This repository is a host-side, fail-closed **existence-proof gate** (v0.3.1 / M1b corpus). Brand: Agent Control Lab only.
 
 Apache-2.0. See `LICENSE`.
 

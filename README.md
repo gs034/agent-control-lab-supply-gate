@@ -6,15 +6,15 @@ Philanthropic public goods / Navigators artefact. **Not** a commercial SKU. Bran
 
 Apache-2.0. See `LICENSE`. SPDX-License-Identifier: Apache-2.0 in source.
 
-Architecture: `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Roadmap (stub → v0.2 → v0.3 / v1, EOI M1b): `docs/ROADMAP.md`. Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`. Lab-only rules: `CONTRIBUTING.md`.
+Architecture: `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Roadmap (stub → v0.2 → v0.3 / v1 → v0.3.1 corpus, EOI M1b): `docs/ROADMAP.md`. Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`. Lab-only rules: `CONTRIBUTING.md`.
 
 ## Architecture
 
-The host is the policy point. A caller that is about to exercise an **install or update** capability builds a structured `SupplyEnvelope` (allowlisted origin, expected SHA pin, optional ref, capability), materialises the artefact, resolves post-checkout HEAD (or artefact digest), and calls `evaluate`. The v0.3 adapter path (`gated_install_or_update`) loads allowlist and update policy from host config (file/env; empty/broken → DENY), applies a fail-closed update policy, then asks a thin installer adapter stub for HEAD, then evaluates. An optional local-worktree helper records a **caller-supplied** digest only; it does not fetch or read git HEAD. The gate ALLOW only when the envelope is well-formed, the origin is on the host allowlist, kill is off, update policy is accepted where required, observed HEAD is a full digest, and that HEAD equals the pin. Marketplace or agent prose is untrusted data: it cannot skip verify, and a structured waive is recorded as `prose_rejected_as_policy` while verify still runs. The trust domain is this host check; it does not inherit trust from a model, a monitor, an MCP server, or a marketplace host.
+The host is the policy point. A caller that is about to exercise an **install or update** capability builds a structured `SupplyEnvelope` (allowlisted origin, expected SHA pin, optional ref, capability), materialises the artefact, resolves post-checkout HEAD (or artefact digest), and calls `evaluate`. The adapter path (`gated_install_or_update`) loads allowlist and update policy from host config (file/env; empty/broken → DENY), applies a fail-closed update policy, then asks a thin installer adapter stub for HEAD, then evaluates. An optional local-worktree helper records a **caller-supplied** digest only; it does not fetch or read git HEAD. The gate ALLOW only when the envelope is well-formed, the origin is on the host allowlist, kill is off, update policy is accepted where required, observed HEAD is a full digest, and that HEAD equals the pin. Marketplace or agent prose is untrusted data: it cannot skip verify, and a structured waive is recorded as `prose_rejected_as_policy` while verify still runs. The trust domain is this host check; it does not inherit trust from a model, a monitor, an MCP server, or a marketplace host.
 
 ## What this is
 
-v0.3 / M1b host capability that demonstrates a diligence-hard control:
+v0.3.1 / M1b host capability that demonstrates a diligence-hard control:
 
 1. **Pin** — envelope carries `expected_sha` and optional `ref`.
 2. **Allowlisted origin** — exact match to a host allowlist (git remote / package source).
@@ -67,10 +67,10 @@ Deny reasons: `origin_not_allowlisted`, `allowlist_invalid`, `update_policy_reje
 
 Host allowlist config: explicit set, JSON/text file, or `ACL_SUPPLY_GATE_ALLOWLIST`. Example: `config/allowlist.example.json`. Update policy loads the same way: explicit mode, JSON file, or `ACL_SUPPLY_GATE_UPDATE_POLICY`. Example: `config/update_policy.example.json` (mode `pin_and_verify` only). Empty or broken host config is DENY.
 
-Additional existence-proof DENY rows (adapter path; official demo unchanged): `eval/omitted_adapter_head/`, `eval/unreadable_allowlist/`, `eval/trust_ref_rejected/`, `eval/auto_latest_rejected/`.
+Additional existence-proof rows (adapter path; official demo unchanged): DENY `eval/omitted_adapter_head/`, `eval/unreadable_allowlist/`, `eval/trust_ref_rejected/`, `eval/auto_latest_rejected/`, `eval/prose_waive_attempt/`. ALLOW `eval/allow_pin_and_verify/` still cannot skip HEAD verify.
 
 Kill: pass `kill_active=True` or set `ACL_SUPPLY_GATE_KILL=1`. Gate faults via `safe_evaluate` also DENY.
 
 ## Host path (not a model)
 
-Callers materialise/checkout, resolve HEAD or artefact digest, then call `evaluate`. The v0.3 helper `gated_install_or_update` does the same after loading host allowlist and update-policy config and a thin installer adapter stub (in-memory or local-worktree caller digest; no live marketplace). If that verify step is skipped (`observed_head` missing), the gate returns **DENY** / `verify_missing`. There is no path where listing prose installs without verify.
+Callers materialise/checkout, resolve HEAD or artefact digest, then call `evaluate`. The helper `gated_install_or_update` does the same after loading host allowlist and update-policy config and a thin installer adapter stub (in-memory or local-worktree caller digest; no live marketplace). If that verify step is skipped (`observed_head` missing), the gate returns **DENY** / `verify_missing`. The recorded ALLOW row still ran verify. There is no path where listing prose installs without verify.

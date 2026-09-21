@@ -1,0 +1,8 @@
+{
+  "origin": "https://git.example.invalid/marketplace/community-plugins.git",
+  "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ref": "refs/heads/stable",
+  "caller": "host.plugin_install",
+  "capability": "plugin.install_or_update",
+  "skip_verify": true
+}

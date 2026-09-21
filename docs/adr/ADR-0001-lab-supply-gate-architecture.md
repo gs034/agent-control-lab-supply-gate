@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-18
-- Updated: 2026-09-18 (v0.3 / M1b host-config load and local-worktree helper)
+- Updated: 2026-09-21 (v0.3.1 / M1b corpus: recorded ALLOW + prose-waive DENY)
 - Brand: Agent Control Lab
 - Licence: Apache-2.0
 - Plane: agent-supply integrity (host decision before install or update)
@@ -80,8 +80,13 @@ origin on a mutable ref / swapped tree) while:
 
 The Lab response is DENY. This ADR does not claim an attack-success-rate.
 
-The in-tree fixture is `eval/plugin4shell_class/`.
+The official demo fixture is `eval/plugin4shell_class/`.
 `python -m supply_gate.demo` must print that DENY receipt and exit 1.
+
+Additional recorded rows under `eval/` (adapter path) include omitted HEAD,
+unreadable allowlist, rejected weak update modes (`trust_ref`,
+`auto_latest`), a dedicated prose-waive attempt, and one ALLOW receipt that
+still cannot skip HEAD verify (`eval/allow_pin_and_verify/`).
 
 ## Allowlist configuration
 
@@ -153,4 +158,5 @@ Kill: `kill_active=True` or `ACL_SUPPLY_GATE_KILL=1`.
 - Receipts stay host JSON. Brand: Agent Control Lab only.
 
 See `docs/threat-model.md` for the control taxonomy, `docs/ROADMAP.md` for
-stub → v0.2 → v0.3 / v1 against EOI M1b, and `README.md` for the call shape.
+stub → v0.2 → v0.3 / v1 → v0.3.1 corpus against EOI M1b, and `README.md`
+for the call shape.
