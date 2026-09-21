@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import supply_gate.gate as gatemod
+from supply_gate.allowlist import load_allowlist
 from supply_gate.demo import run_plugin4shell_class
 from supply_gate.envelope import SupplyEnvelope
 from supply_gate.gate import Decision, evaluate, safe_evaluate
@@ -45,7 +46,13 @@ def test_plugin4shell_class_deny_matches_fixture() -> None:
     expected = json.loads(
         (EVAL_DIR / "expected_deny_receipt.example.json").read_text(encoding="utf-8")
     )
-    decision = evaluate(envelope, observed, untrusted_prose=prose)
+    decision = evaluate(
+        envelope,
+        observed,
+        untrusted_prose=prose,
+        allowed_origins=load_allowlist(use_env=False).origins,
+        kill_active=False,
+    )
     assert decision.verdict is Verdict.DENY
     assert not decision.allowed
     assert DenyReason.HEAD_MISMATCH in decision.reasons

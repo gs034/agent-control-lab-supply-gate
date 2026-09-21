@@ -97,6 +97,8 @@ def test_plugin4shell_class_via_adapter_still_deny() -> None:
         RecordingStubAdapter(observed),
         update_policy=UpdatePolicy.fail_closed_default(),
         untrusted_prose=prose,
+        use_env=False,
+        kill_active=False,
     )
     assert decision.verdict is Verdict.DENY
     assert DenyReason.HEAD_MISMATCH in decision.reasons
@@ -214,5 +216,49 @@ def test_adapter_does_not_change_official_evaluate_receipt() -> None:
             encoding="utf-8"
         )
     )
-    decision = evaluate(envelope, observed, untrusted_prose=prose)
+    decision = evaluate(
+        envelope,
+        observed,
+        untrusted_prose=prose,
+        allowed_origins=load_allowlist(use_env=False).origins,
+        kill_active=False,
+    )
     assert decision.receipt == expected
+
+
+def test_gated_path_use_env_false_ignores_ambient_host_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    allowlist = tmp_path / "exclude-fixture-origin.json"
+    allowlist.write_text(
+        '{"origins": ["https://git.example.invalid/agent-control-lab/skills.git"]}\n',
+        encoding="utf-8",
+    )
+    policy = tmp_path / "weak.json"
+    policy.write_text('{"mode": "trust_ref"}\n', encoding="utf-8")
+    monkeypatch.setenv("ACL_SUPPLY_GATE_ALLOWLIST", str(allowlist))
+    monkeypatch.setenv("ACL_SUPPLY_GATE_UPDATE_POLICY", str(policy))
+    monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", "1")
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        use_env=False,
+    )
+    assert decision.verdict is Verdict.ALLOW
+    assert decision.receipt["kill_active"] is False
+    assert DenyReason.ORIGIN_NOT_ALLOWLISTED not in decision.reasons
+    assert DenyReason.UPDATE_POLICY_REJECTED not in decision.reasons
+    assert DenyReason.KILL_ACTIVE not in decision.reasons
+
+
+def test_gated_path_kill_env_still_denies_when_use_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", "1")
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy=UpdatePolicy.fail_closed_default(),
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.KILL_ACTIVE in decision.reasons
