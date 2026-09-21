@@ -99,6 +99,17 @@ def test_empty_object_file_fail_closed(tmp_path: Path) -> None:
         load_update_policy(path=path, use_env=False)
 
 
+def test_use_env_false_ignores_env_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / "from-env.json"
+    path.write_text('{"mode": "trust_ref"}\n', encoding="utf-8")
+    monkeypatch.setenv("ACL_SUPPLY_GATE_UPDATE_POLICY", str(path))
+    policy, weak = load_update_policy(use_env=False)
+    assert weak is False
+    assert policy is not None
+    assert policy.accepted()
+    assert policy.source == "default"
+
+
 def test_env_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     path = tmp_path / "from-env.json"
     path.write_text('{"mode": "pin_and_verify"}\n', encoding="utf-8")

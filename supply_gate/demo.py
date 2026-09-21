@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from supply_gate.allowlist import load_allowlist
 from supply_gate.gate import evaluate, safe_evaluate
 from supply_gate.receipt import dumps_receipt
 from supply_gate.reasons import Verdict
@@ -37,7 +38,14 @@ def load_plugin4shell_class_inputs(root: Path | None = None) -> tuple[dict[str, 
 
 def run_plugin4shell_class(root: Path | None = None) -> tuple[int, str]:
     envelope, observed, prose = load_plugin4shell_class_inputs(root)
-    decision = evaluate(envelope, observed, untrusted_prose=prose)
+    # Fixture run: builtin allowlist and kill off. Do not inherit host env.
+    decision = evaluate(
+        envelope,
+        observed,
+        untrusted_prose=prose,
+        allowed_origins=load_allowlist(use_env=False).origins,
+        kill_active=False,
+    )
     text = dumps_receipt(decision.receipt)
     code = 0 if decision.verdict is Verdict.ALLOW else 1
     return code, text

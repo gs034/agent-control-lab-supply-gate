@@ -78,6 +78,18 @@ def test_ill_formed_json_fail_closed(tmp_path: Path) -> None:
         load_allowlist(path=path, use_env=False)
 
 
+def test_use_env_false_ignores_env_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / "from-env.json"
+    path.write_text(
+        '{"origins": ["https://git.example.invalid/agent-control-lab/skills.git"]}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ACL_SUPPLY_GATE_ALLOWLIST", str(path))
+    loaded = load_allowlist(use_env=False)
+    assert loaded.source == "builtin"
+    assert loaded.origins == DEFAULT_ALLOWED_ORIGINS
+
+
 def test_env_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     path = tmp_path / "from-env.json"
     path.write_text(

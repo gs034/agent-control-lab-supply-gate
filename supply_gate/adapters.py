@@ -117,6 +117,7 @@ def gated_install_or_update(
     allowlist_path: str | Path | None = None,
     untrusted_prose: str | None = None,
     kill_active: bool | None = None,
+    use_env: bool = True,
 ) -> Decision:
     """Host path: load host config → fail-closed update policy → materialise → evaluate.
 
@@ -124,6 +125,11 @@ def gated_install_or_update(
     broken host config is DENY. Update policy is required on this path; the
     no-config fallback is ``pin_and_verify``. Weak modes DENY. The adapter
     is a stub interface; it does not open a marketplace.
+
+    ``use_env=False`` skips ``ACL_SUPPLY_GATE_*`` lookups so corpus/eval
+    fixture runs stay independent of ambient host config. Pass fixture
+    files or explicit objects instead. When ``use_env`` is False and
+    ``kill_active`` is omitted, kill is off.
     """
     extra: list[DenyReason] = []
     weak_attempt = False
@@ -133,6 +139,7 @@ def gated_install_or_update(
             policy, weak_attempt = load_update_policy(
                 path=update_policy_path,
                 raw=update_policy_raw,
+                use_env=use_env,
                 fallback_default=True,
             )
         except UpdatePolicyError:
@@ -162,16 +169,17 @@ def gated_install_or_update(
         origins = allowlist.origins
     else:
         try:
-            origins = load_allowlist(path=allowlist_path).origins
+            origins = load_allowlist(path=allowlist_path, use_env=use_env).origins
         except AllowlistError:
             extra.append(DenyReason.ALLOWLIST_INVALID)
             origins = frozenset()
 
+    kill = False if kill_active is None and not use_env else kill_active
     return evaluate(
         envelope,
         result.observed_head,
         allowed_origins=origins,
-        kill_active=kill_active,
+        kill_active=kill,
         untrusted_prose=untrusted_prose,
         extra_reasons=tuple(extra),
     )
