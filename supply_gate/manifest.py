@@ -25,12 +25,15 @@ _KEY_ALIASES = {
     "allowed_tools": "permissions",
     "allowedTools": "permissions",
 }
-# Fixed shell-class vocabulary. A bare wildcard grants shell too.
+# Fixed shell-class vocabulary, matched as whole words in the permission head
+# (the part before any "(" argument). Underscores separate words so an MCP tool
+# named like mcp__shell__run is caught. A bare wildcard head grants shell too.
 _SHELL_WORDS = re.compile(
-    r"(?:^|[^a-z0-9_])(?:bash|sh|shell|exec|execute|cmd|powershell|zsh|terminal|run_command)(?:[^a-z0-9_]|$)"
+    r"(?:^|[^a-z0-9])(?:bash|sh|shell|exec|execute|cmd|powershell|zsh|terminal|run_command)(?:[^a-z0-9]|$)"
 )
 _WILDCARDS = frozenset({"*", "all"})
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"), None)
+_ZERO_WIDTH = dict.fromkeys((0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF), None)
+_ENTRY_KEYS = frozenset({"source", "pin", "name"})
 
 
 class ManifestError(ValueError):
@@ -56,6 +59,8 @@ class SupplyManifest:
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> SupplyManifest:
         fields: dict[str, list[Any]] = {"mcp_servers": [], "hooks": [], "permissions": []}
+        # Aliases of one field are merged, not rejected: the union can only
+        # add deny inputs.
         for key, value in raw.items():
             target = _KEY_ALIASES.get(key)
             if target is None:
@@ -95,6 +100,9 @@ def _pinned_sources(values: list[Any], label: str) -> tuple[PinnedSource, ...]:
         for entry in raw:
             if not isinstance(entry, Mapping):
                 raise ManifestError(f"{label} entries must be objects")
+            unknown = set(entry) - _ENTRY_KEYS
+            if unknown:
+                raise ManifestError(f"{label} entry has unknown keys: {sorted(unknown)}")
             source = entry.get("source")
             if not isinstance(source, str) or not source.strip():
                 raise ManifestError(f"{label} entry needs a source")
@@ -124,7 +132,8 @@ def _shell_preapproved(values: list[Any]) -> bool:
 
 def _is_shell_grant(item: str) -> bool:
     norm = unicodedata.normalize("NFKC", item).translate(_ZERO_WIDTH).strip().lower()
-    return norm in _WILDCARDS or bool(_SHELL_WORDS.search(norm))
+    head = norm.split("(", 1)[0].strip()
+    return head in _WILDCARDS or bool(_SHELL_WORDS.search(head))
 
 
 def _hooks_verified(hooks: tuple[PinnedSource, ...], observed: Any) -> bool:

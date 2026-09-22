@@ -56,7 +56,10 @@ def test_shell_preapproval_in_manifest_is_deny() -> None:
         decision = _evaluate({"allowed_tools": ["Read", token]})
         assert decision.verdict is Verdict.DENY, token
         assert decision.reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,), token
-    assert _evaluate({"permissions": ["Read", "WebFetch", "Publish"]}).verdict is Verdict.ALLOW
+    for benign in ("Read", "WebFetch", "Publish", "shift", "hash", "cmdline", "execution_log",
+                   "Read(*.sh)", "Edit(scripts/**/*.sh)", "Skill(exec-plan)", "Write(cmd.txt)"):
+        assert _evaluate({"permissions": [benign]}).verdict is Verdict.ALLOW, benign
+    assert _evaluate({"permissions": ["mcp__shell__run"]}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
     assert _evaluate({"allowedTools": ["Bash"]}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
@@ -96,6 +99,7 @@ def test_ill_formed_manifest_is_envelope_invalid() -> None:
         {"permissions": "Bash"},
         {"tools": ["Bash"]},
         {"plugin": {"mcp_servers": []}},
+        {"hooks": [{"source": "h", "pin": PIN, "bogus": 1}]},
         "manifest",
     ):
         decision = _evaluate(bad) if isinstance(bad, dict) else evaluate(
@@ -103,6 +107,21 @@ def test_ill_formed_manifest_is_envelope_invalid() -> None:
         )
         assert decision.verdict is Verdict.DENY
         assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_unparsed_manifest_object_on_envelope_is_envelope_invalid() -> None:
+    from supply_gate.envelope import SupplyEnvelope
+
+    direct = SupplyEnvelope(
+        origin=ORIGIN,
+        expected_sha=PIN,
+        caller="host.plugin_install",
+        capability="plugin.install_or_update",
+        manifest={"mcp_servers": [{"source": "s"}]},  # type: ignore[arg-type]
+    )
+    decision = evaluate(direct, PIN, allowed_origins=ALLOWED, kill_active=False)
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.ENVELOPE_INVALID,)
 
 
 def test_non_mapping_observed_hooks_is_deny_not_error() -> None:
