@@ -6,7 +6,7 @@ Philanthropic public goods / Navigators artefact. **Not** a commercial SKU. Bran
 
 Apache-2.0. See `LICENSE`. SPDX-License-Identifier: Apache-2.0 in source.
 
-Architecture: `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Roadmap (stub → v0.2 → v0.3 / v1 → v0.3.1 corpus, EOI M1b): `docs/ROADMAP.md`. Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`. Lab-only rules: `CONTRIBUTING.md`.
+Architecture: `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Roadmap (stub → v0.2 → v0.3 / v1 → v0.3.1 corpus, EOI M1b → v0.4 manifest classes): `docs/ROADMAP.md`. Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`. Lab-only rules: `CONTRIBUTING.md`.
 
 ## Architecture
 
@@ -59,15 +59,17 @@ python -m pytest
 
 ## Envelope
 
-Structured `SupplyEnvelope`: `origin`, `expected_sha`, optional `ref`, `caller` / `capability`. Optional untrusted fields such as `skip_verify` are **not** policy; a truthy skip is `prose_rejected_as_policy` and verify still runs.
+Structured `SupplyEnvelope`: `origin`, `expected_sha`, optional `ref`, `caller` / `capability`, optional `manifest`. Optional untrusted fields such as `skip_verify` are **not** policy; a truthy skip is `prose_rejected_as_policy` and verify still runs.
+
+The optional `manifest` is the artefact's own declaration of what it brings: `mcp_servers` (each needs a full-digest `pin`), `permissions` / `allowed_tools` (a manifest cannot pre-approve shell for itself), and `hooks` (each needs a full-digest `pin` and a matching observed digest supplied by the adapter as `observed_hooks`). The gate reads the manifest only to deny; it never grants. An ill-formed manifest is `envelope_invalid`.
 
 `evaluate(envelope, observed_head) -> Decision` with `ALLOW` or `DENY`.
 
-Deny reasons: `origin_not_allowlisted`, `allowlist_invalid`, `update_policy_rejected`, `head_mismatch`, `verify_missing`, `envelope_invalid`, `kill_active`, `prose_rejected_as_policy`.
+Deny reasons: `origin_not_allowlisted`, `allowlist_invalid`, `update_policy_rejected`, `head_mismatch`, `verify_missing`, `envelope_invalid`, `kill_active`, `prose_rejected_as_policy`, `mcp_server_unpinned`, `skill_shell_preapproved`, `hook_update_unverified`.
 
 Host allowlist config: explicit set, JSON/text file, or `ACL_SUPPLY_GATE_ALLOWLIST`. Example: `config/allowlist.example.json`. Update policy loads the same way: explicit mode, JSON file, or `ACL_SUPPLY_GATE_UPDATE_POLICY`. Example: `config/update_policy.example.json` (mode `pin_and_verify` only). Empty or broken host config is DENY.
 
-Additional existence-proof rows (adapter path; official demo unchanged): DENY `eval/omitted_adapter_head/`, `eval/unreadable_allowlist/`, `eval/trust_ref_rejected/`, `eval/auto_latest_rejected/`, `eval/prose_waive_attempt/`. ALLOW `eval/allow_pin_and_verify/` still cannot skip HEAD verify.
+Additional existence-proof rows (adapter path; official demo unchanged): DENY `eval/omitted_adapter_head/`, `eval/unreadable_allowlist/`, `eval/trust_ref_rejected/`, `eval/auto_latest_rejected/`, `eval/prose_waive_attempt/`, and the v0.4 manifest rows `eval/mcp_server_unpinned/`, `eval/skill_shell_preapproved/`, `eval/hook_update_unverified/` (pin and HEAD match in all three; the manifest alone is the deny). ALLOW `eval/allow_pin_and_verify/` still cannot skip HEAD verify.
 
 Kill: pass `kill_active=True` or set `ACL_SUPPLY_GATE_KILL=1`. Gate faults via `safe_evaluate` also DENY.
 

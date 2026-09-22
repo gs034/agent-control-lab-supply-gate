@@ -21,6 +21,7 @@ class SupplyEnvelope:
     ref: str | None = None
     capability: str | None = None
     skip_verify_attempt: bool = False
+    manifest: Any = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> tuple[SupplyEnvelope | None, bool]:
@@ -36,6 +37,10 @@ class SupplyEnvelope:
         caller = raw.get("caller")
         ref = raw.get("ref")
         capability = raw.get("capability")
+        try:
+            manifest = _parse_manifest(raw.get("manifest"))
+        except ValueError:
+            return None, skip_attempt
 
         if not isinstance(origin, str) or not origin.strip():
             return None, skip_attempt
@@ -67,9 +72,16 @@ class SupplyEnvelope:
                 ref=ref_n,
                 capability=cap_n,
                 skip_verify_attempt=skip_attempt,
+                manifest=manifest,
             ),
             skip_attempt,
         )
+
+
+def _parse_manifest(raw: Any) -> Any:
+    from supply_gate.manifest import parse_manifest
+
+    return parse_manifest(raw)
 
 
 def envelope_digest_ok(value: str) -> bool:

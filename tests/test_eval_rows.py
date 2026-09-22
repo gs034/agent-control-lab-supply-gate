@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""v0.3.1 M1b corpus rows on the host adapter path."""
+"""v0.3.1 M1b and v0.4 manifest corpus rows on the host adapter path."""
 
 from __future__ import annotations
 
@@ -22,6 +22,9 @@ DENY_ROWS = (
     "trust_ref_rejected",
     "auto_latest_rejected",
     "prose_waive_attempt",
+    "mcp_server_unpinned",
+    "skill_shell_preapproved",
+    "hook_update_unverified",
 )
 ALLOW_ROWS = ("allow_pin_and_verify",)
 # Host env that must not leak into recorded fixture receipts.
@@ -57,19 +60,23 @@ def _row_kwargs(base: Path) -> dict[str, Any]:
 def _load_envelope_and_head(name: str) -> tuple[Path, dict[str, Any], str | None]:
     base = ROOT / "eval" / name
     envelope = json.loads((base / "envelope.json").read_text(encoding="utf-8"))
-    observed = json.loads((base / "observed_head.json").read_text(encoding="utf-8")).get(
-        "observed_head"
-    )
+    observed_raw = json.loads((base / "observed_head.json").read_text(encoding="utf-8"))
+    observed = observed_raw.get("observed_head")
     if observed is not None and not isinstance(observed, str):
         observed = None
     return base, envelope, observed
+
+
+def _observed_hooks(base: Path) -> dict[str, str] | None:
+    raw = json.loads((base / "observed_head.json").read_text(encoding="utf-8")).get("observed_hooks")
+    return raw if isinstance(raw, dict) else None
 
 
 def _run_row(name: str) -> tuple[dict[str, Any], dict[str, Any]]:
     base, envelope, observed = _load_envelope_and_head(name)
     decision = gated_install_or_update(
         envelope,
-        LocalWorktreeAdapter(observed),
+        LocalWorktreeAdapter(observed, observed_hooks=_observed_hooks(base)),
         **_row_kwargs(base),
     )
     expected_path = base / "expected_allow_receipt.example.json"
@@ -129,6 +136,26 @@ def test_prose_waive_attempt_reason() -> None:
     assert receipt["verify_performed"] is True
     assert receipt["skip_verify_attempt"] is True
     assert receipt["untrusted_prose_present"] is True
+
+
+def test_mcp_server_unpinned_reason() -> None:
+    receipt, _ = _run_row("mcp_server_unpinned")
+    assert receipt["reasons"] == [DenyReason.MCP_SERVER_UNPINNED.value]
+    assert receipt["verify_performed"] is True
+    assert receipt["observed_head"] == receipt["expected_sha"]
+
+
+def test_skill_shell_preapproved_reason() -> None:
+    receipt, _ = _run_row("skill_shell_preapproved")
+    assert receipt["reasons"] == [DenyReason.SKILL_SHELL_PREAPPROVED.value]
+    assert receipt["verify_performed"] is True
+
+
+def test_hook_update_unverified_reason() -> None:
+    receipt, _ = _run_row("hook_update_unverified")
+    assert receipt["reasons"] == [DenyReason.HOOK_UPDATE_UNVERIFIED.value]
+    assert receipt["verify_performed"] is True
+    assert receipt["observed_head"] == receipt["expected_sha"]
 
 
 def test_allow_row_cannot_skip_head_verify() -> None:

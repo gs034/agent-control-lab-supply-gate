@@ -1,0 +1,15 @@
+{
+  "origin": "https://git.example.invalid/agent-control-lab/skills.git",
+  "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ref": "refs/heads/stable",
+  "caller": "host.skill_install",
+  "capability": "skill.install_or_update",
+  "manifest": {
+    "allowed_tools": [
+      "Read",
+      "Grep",
+      "Bash(*)"
+    ],
+    "mcp_servers": []
+  }
+}
