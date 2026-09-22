@@ -57,26 +57,24 @@ def _row_kwargs(base: Path) -> dict[str, Any]:
     return kwargs
 
 
-def _load_envelope_and_head(name: str) -> tuple[Path, dict[str, Any], str | None]:
+def _load_envelope_and_head(
+    name: str,
+) -> tuple[Path, dict[str, Any], str | None, dict[str, str] | None]:
     base = ROOT / "eval" / name
     envelope = json.loads((base / "envelope.json").read_text(encoding="utf-8"))
     observed_raw = json.loads((base / "observed_head.json").read_text(encoding="utf-8"))
     observed = observed_raw.get("observed_head")
     if observed is not None and not isinstance(observed, str):
         observed = None
-    return base, envelope, observed
-
-
-def _observed_hooks(base: Path) -> dict[str, str] | None:
-    raw = json.loads((base / "observed_head.json").read_text(encoding="utf-8")).get("observed_hooks")
-    return raw if isinstance(raw, dict) else None
+    hooks = observed_raw.get("observed_hooks")
+    return base, envelope, observed, hooks if isinstance(hooks, dict) else None
 
 
 def _run_row(name: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    base, envelope, observed = _load_envelope_and_head(name)
+    base, envelope, observed, hooks = _load_envelope_and_head(name)
     decision = gated_install_or_update(
         envelope,
-        LocalWorktreeAdapter(observed, observed_hooks=_observed_hooks(base)),
+        LocalWorktreeAdapter(observed, observed_hooks=hooks),
         **_row_kwargs(base),
     )
     expected_path = base / "expected_allow_receipt.example.json"
@@ -160,7 +158,7 @@ def test_hook_update_unverified_reason() -> None:
 
 def test_allow_row_cannot_skip_head_verify() -> None:
     """ALLOW fixture still DENY if adapter omits HEAD or a structured waive appears."""
-    base, envelope, observed = _load_envelope_and_head("allow_pin_and_verify")
+    base, envelope, observed, _hooks = _load_envelope_and_head("allow_pin_and_verify")
     kwargs = _row_kwargs(base)
 
     omitted = gated_install_or_update(

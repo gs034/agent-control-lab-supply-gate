@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-_FULL_DIGEST = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+from supply_gate.digest import digest_ok
+from supply_gate.manifest import ManifestError, SupplyManifest, parse_manifest
 
 # Structured fields that attempt to waive host verify. Never honoured as policy.
 _BYPASS_KEYS = frozenset({"skip_verify", "waive_verify", "trust_pin_only", "bypass"})
@@ -21,7 +21,7 @@ class SupplyEnvelope:
     ref: str | None = None
     capability: str | None = None
     skip_verify_attempt: bool = False
-    manifest: Any = None
+    manifest: SupplyManifest | None = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> tuple[SupplyEnvelope | None, bool]:
@@ -38,8 +38,8 @@ class SupplyEnvelope:
         ref = raw.get("ref")
         capability = raw.get("capability")
         try:
-            manifest = _parse_manifest(raw.get("manifest"))
-        except ValueError:
+            manifest = parse_manifest(raw.get("manifest"))
+        except ManifestError:
             return None, skip_attempt
 
         if not isinstance(origin, str) or not origin.strip():
@@ -59,7 +59,7 @@ class SupplyEnvelope:
         ref_n = ref.strip() if isinstance(ref, str) and ref.strip() else None
         cap_n = capability.strip() if isinstance(capability, str) and capability.strip() else None
 
-        if not _FULL_DIGEST.fullmatch(sha_n):
+        if not digest_ok(sha_n):
             return None, skip_attempt
         if any(ch.isspace() for ch in origin_n):
             return None, skip_attempt
@@ -78,14 +78,8 @@ class SupplyEnvelope:
         )
 
 
-def _parse_manifest(raw: Any) -> Any:
-    from supply_gate.manifest import parse_manifest
-
-    return parse_manifest(raw)
-
-
 def envelope_digest_ok(value: str) -> bool:
-    return bool(_FULL_DIGEST.fullmatch(value))
+    return digest_ok(value)
 
 
 def _skip_verify_attempt(raw: Mapping[str, Any]) -> bool:

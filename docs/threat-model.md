@@ -55,7 +55,7 @@ Three further *threat patterns*, named by control shape and not by any vendor:
 
 - **Unpinned MCP server:** the artefact's manifest declares an MCP server dependency by tag, branch or promise instead of a full digest. A pinned artefact that pulls unpinned dependencies is not pinned.
 - **Skill shell pre-approval:** the manifest pre-approves shell-class tools for itself so the operator is never asked. A manifest is untrusted data; only the host operator grants capabilities.
-- **Hook update unverified:** a lifecycle hook changes without a pin, or its materialised digest differs from the declared pin. A hook update is an install/update on this plane and gets the same verify.
+- **Hook update unverified:** a lifecycle hook changes without a pin, or its materialised digest is missing or differs from the declared pin. A hook update is an install/update on this plane and gets the same verify.
 
 In all three rows the artefact pin and post-checkout HEAD match; the manifest is the only deny. The gate reads the manifest to deny, never to grant. A manifest that omits its servers or hooks entirely is outside what this gate can see; that is the plane's alternate-path residual. Existence-proof DENY only; no attack-success-rate claim.
 
@@ -70,7 +70,7 @@ In all three rows the artefact pin and post-checkout HEAD match; the manifest is
 | Post-checkout HEAD verify | observed HEAD present, well-formed, and equal to the pin | `verify_missing` or `head_mismatch` → DENY |
 | Prose is data | listing/agent text is never policy | structured waive → `prose_rejected_as_policy`; verify still runs |
 | Declared MCP servers | every `manifest.mcp_servers` entry carries a full-digest pin; tags and promises are not pins | `mcp_server_unpinned` → DENY |
-| Declared permissions | a manifest cannot pre-approve shell-class tools for itself; only the host operator grants capabilities | `skill_shell_preapproved` → DENY |
+| Declared permissions | a manifest cannot pre-approve shell-class tools or a bare wildcard for itself; only the host operator grants capabilities | `skill_shell_preapproved` → DENY |
 | Declared hooks | every `manifest.hooks` entry carries a full-digest pin and the adapter-observed hook digest equals it | `hook_update_unverified` → DENY |
 | Kill | host kill switch (`kill_active` or `ACL_SUPPLY_GATE_KILL`) | `kill_active` → DENY |
 | Fault wrapper | unexpected gate exception | `safe_evaluate` → DENY (`kill_active`) |

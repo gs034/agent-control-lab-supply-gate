@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from supply_gate.allowlist import AllowlistError, load_allowlist
 from supply_gate.envelope import SupplyEnvelope, envelope_digest_ok
+from supply_gate.manifest import SupplyManifest
 from supply_gate.origins import origin_allowlisted
 from supply_gate.reasons import REASON_ORDER, DenyReason, Verdict
 from supply_gate.receipt import build_receipt
@@ -95,9 +96,7 @@ def evaluate(
     elif parsed is not None and observed != parsed.expected_sha:
         reasons.append(DenyReason.HEAD_MISMATCH)
 
-    if parsed is not None and parsed.manifest is not None:
-        # Declared MCP servers, permissions and hooks are untrusted data.
-        # They can only add deny reasons; they never grant anything.
+    if parsed is not None and isinstance(parsed.manifest, SupplyManifest):
         reasons.extend(parsed.manifest.deny_reasons(observed_hooks))
 
     unique = tuple(reason for reason in REASON_ORDER if reason in reasons)

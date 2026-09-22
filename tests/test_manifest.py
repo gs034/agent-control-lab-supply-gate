@@ -47,14 +47,17 @@ def test_unpinned_mcp_server_is_deny() -> None:
     assert decision.reasons == (DenyReason.MCP_SERVER_UNPINNED,)
     short = {"mcp_servers": [{"name": "files", "source": "x", "pin": "abc123"}]}
     assert _evaluate(short).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+    camel = {"mcpServers": [{"source": "https://mcp.example.invalid/files"}]}
+    assert _evaluate(camel).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
 
 
 def test_shell_preapproval_in_manifest_is_deny() -> None:
-    for token in ("Bash", "Bash(*)", "shell:exec", "powershell"):
+    for token in ("Bash", "Bash(*)", "Bash*", "Tool:Bash", "shell:exec", "powershell", "*", "all", "Ba\u200bsh", "\uff42ash"):
         decision = _evaluate({"allowed_tools": ["Read", token]})
         assert decision.verdict is Verdict.DENY, token
         assert decision.reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,), token
-    assert _evaluate({"permissions": ["Read", "WebFetch"]}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": ["Read", "WebFetch", "Publish"]}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowedTools": ["Bash"]}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
 def test_hook_without_pin_or_observed_digest_is_deny() -> None:
@@ -87,12 +90,26 @@ def test_manifest_reasons_stack_after_head_verify_and_never_skip_it() -> None:
 
 
 def test_ill_formed_manifest_is_envelope_invalid() -> None:
-    for bad in ({"mcp_servers": "files"}, {"hooks": [{"pin": PIN}]}, {"permissions": "Bash"}, "manifest"):
+    for bad in (
+        {"mcp_servers": "files"},
+        {"hooks": [{"pin": PIN}]},
+        {"permissions": "Bash"},
+        {"tools": ["Bash"]},
+        {"plugin": {"mcp_servers": []}},
+        "manifest",
+    ):
         decision = _evaluate(bad) if isinstance(bad, dict) else evaluate(
             {**_envelope({}), "manifest": bad}, PIN, allowed_origins=ALLOWED, kill_active=False
         )
         assert decision.verdict is Verdict.DENY
         assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_non_mapping_observed_hooks_is_deny_not_error() -> None:
+    pinned = {"hooks": [{"source": "hooks/h.py", "pin": HOOK_PIN}]}
+    for bad in ([("hooks/h.py", HOOK_PIN)], "hooks/h.py", 7):
+        decision = _evaluate(pinned, observed_hooks=bad)
+        assert decision.reasons == (DenyReason.HOOK_UPDATE_UNVERIFIED,)
 
 
 def test_manifest_reasons_flow_through_adapter_path() -> None:
