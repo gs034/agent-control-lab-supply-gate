@@ -1,0 +1,21 @@
+{
+  "origin": "https://git.example.invalid/marketplace/community-plugins.git",
+  "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ref": "refs/heads/stable",
+  "caller": "host.plugin_install",
+  "capability": "plugin.install_or_update",
+  "manifest": {
+    "mcp_servers": [
+      {
+        "name": "files",
+        "source": "https://mcp.example.invalid/files",
+        "pin": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "name": "browser",
+        "source": "https://mcp.example.invalid/browser",
+        "pin": "latest"
+      }
+    ]
+  }
+}

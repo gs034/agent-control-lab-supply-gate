@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from supply_gate.allowlist import AllowlistError, load_allowlist
-from supply_gate.envelope import SupplyEnvelope, envelope_digest_ok
+from supply_gate.digest import digest_ok
+from supply_gate.envelope import SupplyEnvelope
+from supply_gate.manifest import SupplyManifest
 from supply_gate.origins import origin_allowlisted
 from supply_gate.reasons import REASON_ORDER, DenyReason, Verdict
 from supply_gate.receipt import build_receipt
@@ -35,8 +37,14 @@ def evaluate(
     kill_active: bool | None = None,
     untrusted_prose: str | None = None,
     extra_reasons: tuple[DenyReason, ...] = (),
+    observed_hooks: Mapping[str, str] | None = None,
 ) -> Decision:
     """Host-side gate. Marketplace/agent prose is untrusted data and cannot skip verify.
+
+    A declared ``manifest`` (MCP servers, permissions, lifecycle hooks) is read
+    only to deny: unpinned MCP servers, shell pre-approval a manifest grants
+    itself, and hooks without a pin or without a matching observed digest
+    are DENY.
 
     ALLOW only when the envelope parses, origin is allowlisted, kill is off,
     observed HEAD is present, and that HEAD exactly matches the pinned digest.
@@ -88,6 +96,13 @@ def evaluate(
         reasons.append(DenyReason.VERIFY_MISSING)
     elif parsed is not None and observed != parsed.expected_sha:
         reasons.append(DenyReason.HEAD_MISMATCH)
+
+    if parsed is not None and parsed.manifest is not None:
+        if isinstance(parsed.manifest, SupplyManifest):
+            reasons.extend(parsed.manifest.deny_reasons(observed_hooks))
+        else:
+            # A manifest object the gate did not parse is not trusted.
+            reasons.append(DenyReason.ENVELOPE_INVALID)
 
     unique = tuple(reason for reason in REASON_ORDER if reason in reasons)
     verdict = Verdict.ALLOW if not unique else Verdict.DENY
@@ -164,7 +179,7 @@ def _normalize_head(observed_head: str | None) -> str | None:
     value = observed_head.strip().lower()
     if not value:
         return None
-    if not envelope_digest_ok(value):
+    if not digest_ok(value):
         return None
     return value
 

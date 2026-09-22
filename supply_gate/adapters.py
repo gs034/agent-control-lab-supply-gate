@@ -37,6 +37,7 @@ class MaterialiseResult:
     origin: str
     observed_head: str | None
     notes: str = "stub"
+    observed_hooks: Mapping[str, str] | None = None
 
 
 class InstallerAdapter(Protocol):
@@ -50,11 +51,21 @@ class InstallerAdapter(Protocol):
 class RecordingStubAdapter:
     """In-memory stub. Caller injects observed HEAD. No network."""
 
-    def __init__(self, observed_head: str | None) -> None:
+    def __init__(
+        self,
+        observed_head: str | None,
+        *,
+        observed_hooks: Mapping[str, str] | None = None,
+    ) -> None:
         self._observed_head = observed_head
+        self._observed_hooks = observed_hooks
 
     def materialise(self, request: MaterialiseRequest) -> MaterialiseResult:
-        return MaterialiseResult(origin=request.origin, observed_head=self._observed_head)
+        return MaterialiseResult(
+            origin=request.origin,
+            observed_head=self._observed_head,
+            observed_hooks=self._observed_hooks,
+        )
 
 
 def caller_supplied_head(
@@ -93,9 +104,11 @@ class LocalWorktreeAdapter:
         observed_head: str | None,
         *,
         worktree: str | Path | None = None,
+        observed_hooks: Mapping[str, str] | None = None,
     ) -> None:
         self._observed_head = observed_head
         self._worktree = worktree
+        self._observed_hooks = observed_hooks
 
     def materialise(self, request: MaterialiseRequest) -> MaterialiseResult:
         head = caller_supplied_head(self._observed_head, worktree=self._worktree)
@@ -103,6 +116,7 @@ class LocalWorktreeAdapter:
             origin=request.origin,
             observed_head=head,
             notes="local-worktree",
+            observed_hooks=self._observed_hooks,
         )
 
 
@@ -182,6 +196,7 @@ def gated_install_or_update(
         kill_active=kill,
         untrusted_prose=untrusted_prose,
         extra_reasons=tuple(extra),
+        observed_hooks=result.observed_hooks,
     )
 
 

@@ -1,0 +1,6 @@
+{
+  "observed_head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "observed_hooks": {
+    "hooks/post_install.py": "dddddddddddddddddddddddddddddddddddddddd"
+  }
+}
