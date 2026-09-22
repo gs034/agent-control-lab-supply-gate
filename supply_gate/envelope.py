@@ -78,9 +78,6 @@ class SupplyEnvelope:
         )
 
 
-def envelope_digest_ok(value: str) -> bool:
-    return digest_ok(value)
-
 
 def _skip_verify_attempt(raw: Mapping[str, Any]) -> bool:
     if _truthy_bypass(raw):
