@@ -17,7 +17,7 @@ row. Later Lab cuts stay inside that same capability.
 | **stub (v0.1)** | `evaluate()` ALLOW only on pin + allowlisted origin + HEAD match. Plugin4Shell-class eval row is a deterministic DENY. Marketplace prose cannot skip verify. | M1b existence-proof: a host DENY receipt for the published threat pattern. |
 | **v0.2 foundation** | Architecture pinned in `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Allowlist is a loadable host config (fail-closed on empty/broken). Update policy is fail-closed `pin_and_verify`. Thin installer adapter **stub interfaces** exist; no live marketplace. Demo DENY row unchanged. | M1b architecture and host policy surfaces named. The install/update capability is specified, not only demonstrated. |
 | **v0.3 / v1** | Adapter path is the documented host call: load allowlist and update policy from host config (file/env; empty/broken → DENY) → local materialise → HEAD → `evaluate`. Additional DENY rows: omitted adapter HEAD, unreadable allowlist, `trust_ref` / `auto_latest` rejected. Optional local-worktree helper takes a caller-supplied digest only. Still no live marketplace. Demo DENY row unchanged. | M1b host capability: pin, origin allowlist, HEAD verify, and fail-closed update are one host path with recorded DENY receipts. |
-| **v0.3.1 corpus** (this cut) | Recorded ALLOW row that still cannot skip HEAD verify. Dedicated prose-waive DENY row. Existing host-path DENY rows remain. Official demo DENY unchanged. | M1b corpus: DENY existence-proofs plus one ALLOW receipt that still ran verify. |
+| **v0.3.1 corpus** | Recorded ALLOW row that still cannot skip HEAD verify. Dedicated prose-waive DENY row. Existing host-path DENY rows remain. Official demo DENY unchanged. | M1b corpus: DENY existence-proofs plus one ALLOW receipt that still ran verify. |
 
 ## Stub (v0.1) — done on `main`
 
@@ -66,6 +66,30 @@ row. Later Lab cuts stay inside that same capability.
   HEAD verify.
 - Existing host-path DENY rows and the official Plugin4Shell-class demo stay
   fail-closed DENY. Still no live marketplace.
+
+| **v0.4 manifest classes** (this cut) | The declared artefact manifest is read only to deny. Three DENY rows where pin and HEAD match but the manifest fails: unpinned MCP server, shell pre-approval a manifest grants itself, lifecycle hook without a pin or with a non-matching observed digest. Receipt schema v1 unchanged; three reason codes appended. | M1b corpus extended to the MCP, skill-permission and hook-update surfaces named in the harness-defect literature. Threat-pattern DENY rows only; not an ecosystem remediation claim. |
+
+## v0.4 manifest classes — this cut
+
+- `SupplyEnvelope.manifest` (optional): `mcp_servers`, `permissions` /
+  `allowed_tools`, `hooks`. Parsed by `supply_gate.manifest`; ill-formed →
+  `envelope_invalid`.
+- `mcp_server_unpinned`: any declared MCP server without a full-digest pin.
+- `skill_shell_preapproved`: any shell-class token in the manifest's own
+  permission list. The host operator grants capabilities; a manifest does not.
+- `hook_update_unverified`: any declared hook without a full-digest pin, or
+  whose adapter-observed digest (`observed_hooks`) is missing or differs.
+- Rows: `eval/mcp_server_unpinned/`, `eval/skill_shell_preapproved/`,
+  `eval/hook_update_unverified/`. In every row the artefact pin and HEAD
+  match; the manifest is the only deny. `verify_performed` stays true.
+- Receipt schema stays v1 (no new keys). Existing recorded receipts are
+  byte-identical. Official Plugin4Shell-class demo unchanged DENY.
+
+Still open on this cut: observed hook digests are caller-supplied like HEAD
+(no live materialisation); permission tokens are matched by a fixed
+shell-class list, not by a harness-specific grammar; a manifest that omits
+its hooks or servers entirely is not detected here (that is the plane's
+alternate-path residual, stated in the threat model).
 
 ## Out of scope for every cut on this map
 

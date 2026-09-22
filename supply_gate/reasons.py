@@ -22,6 +22,9 @@ class DenyReason(str, Enum):
     UPDATE_POLICY_REJECTED = "update_policy_rejected"
     VERIFY_MISSING = "verify_missing"
     HEAD_MISMATCH = "head_mismatch"
+    MCP_SERVER_UNPINNED = "mcp_server_unpinned"
+    SKILL_SHELL_PREAPPROVED = "skill_shell_preapproved"
+    HOOK_UPDATE_UNVERIFIED = "hook_update_unverified"
 
 
 REASON_ORDER: tuple[DenyReason, ...] = tuple(DenyReason)
