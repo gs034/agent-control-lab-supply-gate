@@ -61,7 +61,7 @@ python -m pytest
 
 Structured `SupplyEnvelope`: `origin`, `expected_sha`, optional `ref`, `caller` / `capability`, optional `manifest`. Optional untrusted fields such as `skip_verify` are **not** policy; a truthy skip is `prose_rejected_as_policy` and verify still runs.
 
-The optional `manifest` is the artefact's own declaration of what it brings: `mcp_servers` (each needs a full-digest `pin`), `permissions` / `allowed_tools` (a manifest cannot pre-approve shell for itself), and `hooks` (each needs a full-digest `pin` and a matching observed digest supplied by the adapter as `observed_hooks`). The gate reads the manifest only to deny; it never grants. An ill-formed manifest is `envelope_invalid`.
+The optional `manifest` is the artefact's own declaration of what it brings: `mcp_servers` (each needs a full-digest `pin`), `permissions` / `allowed_tools` (a manifest cannot pre-approve shell for itself), and `hooks` (each needs a full-digest `pin` and a matching observed digest supplied by the adapter as `observed_hooks`). The gate reads the manifest only to deny; it never grants. Unknown top-level keys and ill-formed values are `envelope_invalid`; the camelCase spellings `mcpServers` and `allowedTools` are accepted as aliases.
 
 `evaluate(envelope, observed_head) -> Decision` with `ALLOW` or `DENY`.
 
