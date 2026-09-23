@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""v0.4 manifest classes: unpinned MCP server, shell pre-approval, unverified hook update."""
+"""v0.4 manifest classes and real-shape loader: MCP, permissions, hooks."""
 
 from __future__ import annotations
 
@@ -96,7 +96,8 @@ def test_ill_formed_manifest_is_envelope_invalid() -> None:
     for bad in (
         {"mcp_servers": "files"},
         {"hooks": [{"pin": PIN}]},
-        {"permissions": "Bash"},
+        {"permissions": {"allow": ["Read"], "defaultMode": "bypass"}},
+        {"permissions": 1},
         {"tools": ["Bash"]},
         {"plugin": {"mcp_servers": []}},
         {"hooks": [{"source": "h", "pin": PIN, "bogus": 1}]},
@@ -147,6 +148,205 @@ def test_manifest_reasons_flow_through_adapter_path() -> None:
     assert verified.verdict is Verdict.ALLOW
     unverified = gated_install_or_update(_envelope(manifest), RecordingStubAdapter(PIN), **kwargs)
     assert unverified.reasons == (DenyReason.HOOK_UPDATE_UNVERIFIED,)
+
+
+HOOK_B = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+SHA256 = "ab" * 32
+
+
+def _real_shape_manifest(**overrides: object) -> dict[str, object]:
+    manifest: dict[str, object] = {
+        "mcpServers": {
+            "files": {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "mcp-files"],
+                "env": {"EXAMPLE_ROOT": "/tmp/example"},
+                "cwd": "/tmp/example",
+                "pin": PIN,
+            },
+            "browser": {
+                "type": "http",
+                "url": "https://mcp.example.invalid/browser",
+                "headers": {"X-Example": "1"},
+                "pin": SHA256,
+            },
+        },
+        "permissions": {
+            "allow": ["Read", "Grep", "Edit(src/**)"],
+            "deny": ["Bash"],
+            "ask": ["WebFetch"],
+        },
+        "hooks": {
+            "PostToolUse": [
+                {
+                    "matcher": "Write|Edit",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "hooks/format.py",
+                            "timeout": 30,
+                            "pin": HOOK_PIN,
+                        }
+                    ],
+                }
+            ],
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {
+                            "type": "http",
+                            "url": "https://hooks.example.invalid/session",
+                            "pin": HOOK_B,
+                        }
+                    ]
+                }
+            ],
+        },
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+_REAL_HOOKS = {
+    "hooks/format.py": HOOK_PIN,
+    "https://hooks.example.invalid/session": HOOK_B,
+}
+
+
+def test_real_shape_manifest_allows_when_pinned_and_head_matches() -> None:
+    decision = _evaluate(_real_shape_manifest(), observed_hooks=_REAL_HOOKS)
+    assert decision.verdict is Verdict.ALLOW
+    assert decision.reasons == ()
+    assert decision.receipt["verify_performed"] is True
+    assert decision.receipt["observed_head"] == PIN
+
+
+def test_real_shape_manifest_still_fails_closed_on_head_verify() -> None:
+    """Client-config shapes do not skip pin or post-checkout HEAD verify."""
+    missing = evaluate(
+        _envelope(_real_shape_manifest()),
+        None,
+        allowed_origins=ALLOWED,
+        kill_active=False,
+        observed_hooks=_REAL_HOOKS,
+    )
+    assert missing.verdict is Verdict.DENY
+    assert missing.reasons == (DenyReason.VERIFY_MISSING,)
+    assert missing.receipt["verify_performed"] is False
+
+    swapped = evaluate(
+        _envelope(_real_shape_manifest()),
+        "b" * 40,
+        allowed_origins=ALLOWED,
+        kill_active=False,
+        observed_hooks=_REAL_HOOKS,
+    )
+    assert swapped.reasons == (DenyReason.HEAD_MISMATCH,)
+    assert swapped.receipt["verify_performed"] is True
+
+
+def test_real_shape_mcp_transport_without_digest_is_unpinned() -> None:
+    command = {
+        "mcpServers": {
+            "files": {
+                "command": "npx",
+                "args": ["-y", "mcp-files"],
+                "env": {"EXAMPLE_ROOT": "/tmp/example"},
+            }
+        }
+    }
+    assert _evaluate(command).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+    remote = {
+        "mcpServers": {
+            "browser": {"type": "streamable-http", "url": "https://mcp.example.invalid/browser"}
+        }
+    }
+    assert _evaluate(remote).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+    tagged = {"mcp_servers": {"files": {"command": "npx", "args": ["-y", "mcp-files"], "pin": "latest"}}}
+    assert _evaluate(tagged).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+
+
+def test_real_shape_permission_object_and_string_grants() -> None:
+    granted = {"permissions": {"allow": ["Read", "Bash(git status)"], "deny": ["WebFetch"], "ask": ["Edit"]}}
+    assert _evaluate(granted).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    not_a_grant = {"permissions": {"deny": ["Bash"], "ask": ["shell"]}}
+    assert _evaluate(not_a_grant).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": "Bash(git:*) Read"}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"allowed-tools": "Read, Grep"}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": "Read Grep"}).verdict is Verdict.ALLOW
+
+
+def test_real_shape_hook_map_needs_pin_and_observed_digest() -> None:
+    unpinned = {
+        "hooks": {
+            "PostToolUse": [
+                {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "hooks/format.py"}]}
+            ]
+        }
+    }
+    assert _evaluate(unpinned, observed_hooks=_REAL_HOOKS).reasons == (DenyReason.HOOK_UPDATE_UNVERIFIED,)
+    pinned = {
+        "hooks": {
+            "PostToolUse": [
+                {
+                    "matcher": "Write|Edit",
+                    "hooks": [{"type": "command", "command": "hooks/format.py", "pin": HOOK_PIN}],
+                }
+            ]
+        }
+    }
+    swapped = {"hooks/format.py": PIN}
+    assert _evaluate(pinned, observed_hooks=swapped).reasons == (DenyReason.HOOK_UPDATE_UNVERIFIED,)
+    prompt = {
+        "hooks": {
+            "Stop": [{"hooks": [{"type": "prompt", "prompt": "Review the diff.", "pin": HOOK_PIN}]}]
+        }
+    }
+    assert _evaluate(prompt, observed_hooks={"Review the diff.": HOOK_PIN}).verdict is Verdict.ALLOW
+
+
+def test_real_shape_reasons_stack_without_skipping_verify() -> None:
+    manifest = {
+        "mcpServers": {"files": {"command": "npx", "args": ["-y", "mcp-files"]}},
+        "permissions": {"allow": ["Bash"]},
+        "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "hooks/session_start.py"}]}]},
+    }
+    decision = evaluate(
+        _envelope(manifest),
+        None,
+        allowed_origins=ALLOWED,
+        kill_active=False,
+    )
+    assert decision.reasons == (
+        DenyReason.VERIFY_MISSING,
+        DenyReason.MCP_SERVER_UNPINNED,
+        DenyReason.SKILL_SHELL_PREAPPROVED,
+        DenyReason.HOOK_UPDATE_UNVERIFIED,
+    )
+    assert decision.receipt["verify_performed"] is False
+
+
+def test_real_shape_ill_formed_values_are_envelope_invalid() -> None:
+    for bad in (
+        {"mcpServers": {"files": "npx"}},
+        {"mcpServers": {"": {"command": "npx"}}},
+        {"mcpServers": {"files": {"command": "npx", "args": [1]}}},
+        {"mcpServers": {"files": {"command": "npx", "env": {"X": 1}}}},
+        {"mcpServers": {"files": {"type": "http", "command": "npx"}}},
+        {"mcpServers": {"files": {"type": "plugin", "command": "npx"}}},
+        {"mcpServers": {"files": {"command": "npx", "token": "x"}}},
+        {"hooks": {"PostToolUse": [{"type": "command", "command": "hooks/format.py"}]}},
+        {"hooks": {"PostToolUse": {"hooks": []}}},
+        {"hooks": {"": []}},
+        {"hooks": {"Stop": [{"hooks": [{"type": "plugin", "command": "hooks/x.py"}]}]}},
+        {"hooks": {"Stop": [{"hooks": [{"type": "command"}]}]}},
+        {"permissions": {"allow": ["Read"], "additionalDirectories": ["/tmp"]}},
+        {"allowed-tools": ["Read", 1]},
+    ):
+        decision = _evaluate(bad)
+        assert decision.verdict is Verdict.DENY, bad
+        assert DenyReason.ENVELOPE_INVALID in decision.reasons, bad
 
 
 def test_manifest_absent_leaves_receipt_shape_unchanged() -> None:

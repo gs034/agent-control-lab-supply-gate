@@ -1,0 +1,35 @@
+{
+  "origin": "https://git.example.invalid/marketplace/community-plugins.git",
+  "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ref": "refs/heads/stable",
+  "caller": "host.plugin_install",
+  "capability": "plugin.install_or_update",
+  "manifest": {
+    "hooks": {
+      "PostToolUse": [
+        {
+          "matcher": "Write|Edit",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "hooks/format.py",
+              "timeout": 30,
+              "pin": "cccccccccccccccccccccccccccccccccccccccc"
+            }
+          ]
+        }
+      ],
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "hooks/session_start.py",
+              "pin": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

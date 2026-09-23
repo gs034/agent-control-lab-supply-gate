@@ -1,0 +1,14 @@
+{
+  "origin": "https://git.example.invalid/agent-control-lab/skills.git",
+  "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ref": "refs/heads/stable",
+  "caller": "host.skill_install",
+  "capability": "skill.install_or_update",
+  "manifest": {
+    "permissions": {
+      "allow": ["Read", "Grep", "Bash(git status)"],
+      "deny": ["WebFetch"],
+      "ask": ["Edit"]
+    }
+  }
+}

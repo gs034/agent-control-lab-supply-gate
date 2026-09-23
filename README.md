@@ -6,7 +6,7 @@ Philanthropic public goods / Navigators artefact. **Not** a commercial SKU. Bran
 
 Apache-2.0. See `LICENSE`. SPDX-License-Identifier: Apache-2.0 in source.
 
-Architecture: `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Roadmap (stub → v0.2 → v0.3 / v1 → v0.3.1 corpus, EOI M1b → v0.4 manifest classes): `docs/ROADMAP.md`. Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`. Lab-only rules: `CONTRIBUTING.md`.
+Architecture: `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Roadmap (stub → v0.2 → v0.3 / v1 → v0.3.1 corpus, EOI M1b → v0.4 manifest classes → v0.4.1 real-shape loader): `docs/ROADMAP.md`. Threat model: `docs/threat-model.md`. Reporting: `SECURITY.md`. Lab-only rules: `CONTRIBUTING.md`.
 
 ## Architecture
 
@@ -61,7 +61,7 @@ python -m pytest
 
 Structured `SupplyEnvelope`: `origin`, `expected_sha`, optional `ref`, `caller` / `capability`, optional `manifest`. Optional untrusted fields such as `skip_verify` are **not** policy; a truthy skip is `prose_rejected_as_policy` and verify still runs.
 
-The optional `manifest` is the artefact's own declaration of what it brings: `mcp_servers` (each needs a full-digest `pin`), `permissions` / `allowed_tools` (a manifest cannot pre-approve shell for itself), and `hooks` (each needs a full-digest `pin` and a matching observed digest supplied by the adapter as `observed_hooks`). The gate reads the manifest only to deny; it never grants. Unknown top-level keys and ill-formed values are `envelope_invalid`; the camelCase spellings `mcpServers` and `allowedTools` are accepted as aliases.
+The optional `manifest` is the artefact's own declaration of what it brings: `mcp_servers` (each needs a full-digest `pin`), `permissions` / `allowed_tools` (a manifest cannot pre-approve shell for itself), and `hooks` (each needs a full-digest `pin` and a matching observed digest supplied by the adapter as `observed_hooks`). The gate reads the manifest only to deny; it never grants. Unknown top-level keys and ill-formed values are `envelope_invalid`. Accepted spellings include `mcpServers`, `allowedTools`, and `allowed-tools`. The same three classes also accept client-config shapes: a name-keyed MCP transport (`command` / `args` / `env` or `type` / `url`), a permissions object (`allow` / `deny` / `ask`) or string, and a lifecycle-event hook map. Only `allow` is a grant. `observed_hooks` is keyed by the hook command, url, prompt, or explicit `source`. Pin and post-checkout HEAD verify are unchanged.
 
 `evaluate(envelope, observed_head) -> Decision` with `ALLOW` or `DENY`.
 
@@ -69,7 +69,7 @@ Deny reasons: `origin_not_allowlisted`, `allowlist_invalid`, `update_policy_reje
 
 Host allowlist config: explicit set, JSON/text file, or `ACL_SUPPLY_GATE_ALLOWLIST`. Example: `config/allowlist.example.json`. Update policy loads the same way: explicit mode, JSON file, or `ACL_SUPPLY_GATE_UPDATE_POLICY`. Example: `config/update_policy.example.json` (mode `pin_and_verify` only). Empty or broken host config is DENY.
 
-Additional existence-proof rows (adapter path; official demo unchanged): DENY `eval/omitted_adapter_head/`, `eval/unreadable_allowlist/`, `eval/trust_ref_rejected/`, `eval/auto_latest_rejected/`, `eval/prose_waive_attempt/`, and the v0.4 manifest rows `eval/mcp_server_unpinned/`, `eval/skill_shell_preapproved/`, `eval/hook_update_unverified/` (pin and HEAD match in all three; the manifest alone is the deny). ALLOW `eval/allow_pin_and_verify/` still cannot skip HEAD verify.
+Additional existence-proof rows (adapter path; official demo unchanged): DENY `eval/omitted_adapter_head/`, `eval/unreadable_allowlist/`, `eval/trust_ref_rejected/`, `eval/auto_latest_rejected/`, `eval/prose_waive_attempt/`, and the v0.4 manifest rows `eval/mcp_server_unpinned/`, `eval/skill_shell_preapproved/`, `eval/hook_update_unverified/` (pin and HEAD match in all three; the manifest alone is the deny). Real-shape rows `eval/mcp_server_real_shape/`, `eval/skill_shell_real_shape/`, and `eval/hook_real_shape/` use the same three deny reasons. ALLOW `eval/allow_pin_and_verify/` still cannot skip HEAD verify.
 
 Kill: pass `kill_active=True` or set `ACL_SUPPLY_GATE_KILL=1`. Gate faults via `safe_evaluate` also DENY.
 

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-control-lab-supply-gate"
-version = "0.4.0"
-description = "Agent Control Lab host-side agent-supply integrity gate (M1b corpus and v0.4 manifest classes; fail-closed)."
+version = "0.4.1"
+description = "Agent Control Lab host-side agent-supply integrity gate (M1b corpus, v0.4 manifest classes, real-shape loader; fail-closed)."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
