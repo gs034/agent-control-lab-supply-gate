@@ -57,7 +57,7 @@ Three further *threat patterns*, named by control shape and not by any vendor:
 - **Skill shell pre-approval:** the manifest pre-approves shell-class tools for itself so the operator is never asked. A manifest is untrusted data; only the host operator grants capabilities.
 - **Hook update unverified:** a lifecycle hook changes without a pin, or its materialised digest is missing or differs from the declared pin. A hook update is an install/update on this plane and gets the same verify.
 
-In all three rows the artefact pin and post-checkout HEAD match; the manifest is the only deny. The gate reads the manifest to deny, never to grant. A manifest that omits its servers or hooks entirely is outside what this gate can see; that is the plane's alternate-path residual. Existence-proof DENY only; no attack-success-rate claim.
+In all three rows the artefact pin and post-checkout HEAD match; the manifest is the only deny. The gate reads the manifest to deny, never to grant. The same three reasons apply when the manifest uses a client-config shape (name-keyed MCP transport, permissions object or string, lifecycle-event hook map) as well as the stub list. A shape this gate does not understand is `envelope_invalid`. No further deny class is introduced for those shapes. A manifest that omits its servers or hooks entirely is outside what this gate can see; that is the plane's alternate-path residual. Existence-proof DENY only; no attack-success-rate claim.
 
 ## Control taxonomy
 

@@ -18,7 +18,8 @@ row. Later Lab cuts stay inside that same capability.
 | **v0.2 foundation** | Architecture pinned in `docs/adr/ADR-0001-lab-supply-gate-architecture.md`. Allowlist is a loadable host config (fail-closed on empty/broken). Update policy is fail-closed `pin_and_verify`. Thin installer adapter **stub interfaces** exist; no live marketplace. Demo DENY row unchanged. | M1b architecture and host policy surfaces named. The install/update capability is specified, not only demonstrated. |
 | **v0.3 / v1** | Adapter path is the documented host call: load allowlist and update policy from host config (file/env; empty/broken → DENY) → local materialise → HEAD → `evaluate`. Additional DENY rows: omitted adapter HEAD, unreadable allowlist, `trust_ref` / `auto_latest` rejected. Optional local-worktree helper takes a caller-supplied digest only. Still no live marketplace. Demo DENY row unchanged. | M1b host capability: pin, origin allowlist, HEAD verify, and fail-closed update are one host path with recorded DENY receipts. |
 | **v0.3.1 corpus** | Recorded ALLOW row that still cannot skip HEAD verify. Dedicated prose-waive DENY row. Existing host-path DENY rows remain. Official demo DENY unchanged. | M1b corpus: DENY existence-proofs plus one ALLOW receipt that still ran verify. |
-| **v0.4 manifest classes** (this cut) | The declared artefact manifest is read only to deny. Three DENY rows where pin and HEAD match but the manifest fails: unpinned MCP server, shell pre-approval a manifest grants itself, lifecycle hook without a pin or with a non-matching observed digest. Receipt schema v1 unchanged; three reason codes appended. | M1b corpus extended to the MCP, skill-permission and hook-update surfaces named in the harness-defect literature. Threat-pattern DENY rows only; not an ecosystem remediation claim. |
+| **v0.4 manifest classes** | The declared artefact manifest is read only to deny. Three DENY rows where pin and HEAD match but the manifest fails: unpinned MCP server, shell pre-approval a manifest grants itself, lifecycle hook without a pin or with a non-matching observed digest. Receipt schema v1 unchanged; three reason codes appended. | M1b corpus extended to the MCP, skill-permission and hook-update surfaces named in the harness-defect literature. Threat-pattern DENY rows only; not an ecosystem remediation claim. |
+| **v0.4.1 real-shape loader** (this cut) | Same three manifest DENY classes. The loader also accepts client-config shapes: name-keyed MCP transports, a permissions object or string, and a lifecycle-event hook map. Unknown keys stay `envelope_invalid`. No new deny reasons. Pin and post-checkout HEAD verify unchanged. | M1b corpus: the same threat-pattern DENY rows on realistic manifest shapes. Not a new control and not a coverage taxonomy. |
 
 ## Stub (v0.1) — done on `main`
 
@@ -68,7 +69,7 @@ row. Later Lab cuts stay inside that same capability.
 - Existing host-path DENY rows and the official Plugin4Shell-class demo stay
   fail-closed DENY. Still no live marketplace.
 
-## v0.4 manifest classes (this cut)
+## v0.4 manifest classes
 
 - `SupplyEnvelope.manifest` (optional): `mcp_servers` (or `mcpServers`),
   `permissions` / `allowed_tools` (or `allowedTools`), `hooks`. Any other
@@ -85,12 +86,39 @@ row. Later Lab cuts stay inside that same capability.
 - Receipt schema stays v1 (no new keys). Existing recorded receipts are
   byte-identical. Official Plugin4Shell-class demo unchanged DENY.
 
-Still open on this cut: observed hook digests are caller-supplied like HEAD
+Still open on the v0.4 classes: observed hook digests are caller-supplied like HEAD
 (no live materialisation); permission tokens are matched by a fixed
 shell-class word list plus bare wildcards (`*`, `all`) after Unicode
 normalisation, not by a harness-specific grammar; a manifest that omits
 its hooks or servers entirely is not detected here (that is the plane's
 alternate-path residual, stated in the threat model).
+
+## v0.4.1 real-shape loader (this cut)
+
+Parent tip `938769656e7cb311d1953dee9df22b79275e6c09`.
+
+The v0.4 classes stay. The loader also accepts the client-config shapes
+those classes already name. Stub lists still parse. Any other key is
+`envelope_invalid`. No new deny reasons. Pin and post-checkout HEAD
+verify are unchanged: missing or unequal HEAD is still DENY.
+
+- `mcpServers` / `mcp_servers` may be a name-keyed object. Each value may
+  carry `command`, `args`, `env`, `cwd`, or `type` (`stdio`, `sse`,
+  `http`, `streamable-http`) plus `url` and `headers`, and an optional
+  full-digest `pin`. A transport without a full-digest pin is
+  `mcp_server_unpinned`.
+- `permissions` / `allowed_tools` / `allowedTools` / `allowed-tools` may
+  be a string or an object with `allow`, `deny`, and `ask`. Only `allow`
+  (and a bare list or string) is a grant. A shell-class grant is
+  `skill_shell_preapproved`.
+- `hooks` may be a lifecycle-event object. Each event lists groups
+  (`matcher`, `hooks`). A hook command, url, or prompt needs a full-digest
+  `pin` and a matching `observed_hooks` entry keyed by that command, url,
+  prompt, or explicit `source`. Otherwise `hook_update_unverified`.
+
+Rows: `eval/mcp_server_real_shape/`, `eval/skill_shell_real_shape/`,
+`eval/hook_real_shape/`. In every row the artefact pin and HEAD match;
+the manifest is the only deny. `verify_performed` stays true.
 
 ## Out of scope for every cut on this map
 

@@ -25,6 +25,9 @@ DENY_ROWS = (
     "mcp_server_unpinned",
     "skill_shell_preapproved",
     "hook_update_unverified",
+    "mcp_server_real_shape",
+    "skill_shell_real_shape",
+    "hook_real_shape",
 )
 ALLOW_ROWS = ("allow_pin_and_verify",)
 # Host env that must not leak into recorded fixture receipts.
@@ -151,6 +154,27 @@ def test_skill_shell_preapproved_reason() -> None:
 
 def test_hook_update_unverified_reason() -> None:
     receipt, _ = _run_row("hook_update_unverified")
+    assert receipt["reasons"] == [DenyReason.HOOK_UPDATE_UNVERIFIED.value]
+    assert receipt["verify_performed"] is True
+    assert receipt["observed_head"] == receipt["expected_sha"]
+
+
+def test_mcp_server_real_shape_reason() -> None:
+    receipt, _ = _run_row("mcp_server_real_shape")
+    assert receipt["reasons"] == [DenyReason.MCP_SERVER_UNPINNED.value]
+    assert receipt["verify_performed"] is True
+    assert receipt["observed_head"] == receipt["expected_sha"]
+
+
+def test_skill_shell_real_shape_reason() -> None:
+    receipt, _ = _run_row("skill_shell_real_shape")
+    assert receipt["reasons"] == [DenyReason.SKILL_SHELL_PREAPPROVED.value]
+    assert receipt["verify_performed"] is True
+    assert receipt["observed_head"] == receipt["expected_sha"]
+
+
+def test_hook_real_shape_reason() -> None:
+    receipt, _ = _run_row("hook_real_shape")
     assert receipt["reasons"] == [DenyReason.HOOK_UPDATE_UNVERIFIED.value]
     assert receipt["verify_performed"] is True
     assert receipt["observed_head"] == receipt["expected_sha"]

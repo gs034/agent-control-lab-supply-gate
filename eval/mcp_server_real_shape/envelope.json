@@ -1,0 +1,24 @@
+{
+  "origin": "https://git.example.invalid/marketplace/community-plugins.git",
+  "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ref": "refs/heads/stable",
+  "caller": "host.plugin_install",
+  "capability": "plugin.install_or_update",
+  "manifest": {
+    "mcpServers": {
+      "files": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "mcp-files"],
+        "env": {"EXAMPLE_ROOT": "/tmp/example"},
+        "cwd": "/tmp/example",
+        "pin": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "browser": {
+        "type": "http",
+        "url": "https://mcp.example.invalid/browser",
+        "headers": {"X-Example": "1"}
+      }
+    }
+  }
+}
