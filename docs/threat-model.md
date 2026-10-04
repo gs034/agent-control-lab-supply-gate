@@ -87,6 +87,7 @@ There is no path where untrusted prose installs without verify. If the caller om
 - Not a production marketplace integration, live git-host adapter, or production UI.
 - Not a monitor, MCP policy engine, or model-trust layer.
 - Not an attack-success-rate scoreboard.
+- Not a judge of upstream content. A pin bump to a commit that already carries a malicious contribution (for example, one an agent landed upstream through fake identities and a reviewed PR) passes every check here once the operator accepts that pin. Origin, digest and HEAD verify prove which bytes were pinned, not that those bytes are benign. Agent-driven upstream poisoning of this kind is documented in arXiv:2609.38415v1 (UK AISI, simulated environments). Proposed wording, for owner review.
 - Existence-proof gate. Default allowlist hosts are `*.example.invalid`.
 - Thin installer adapters are stub interfaces only. The optional local-worktree helper takes a caller-supplied digest; it is not a network install.
 
