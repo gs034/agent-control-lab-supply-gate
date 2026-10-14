@@ -13,6 +13,7 @@ permissions object or string, and a lifecycle-event hook map.
 from __future__ import annotations
 
 import re
+import shlex
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -90,8 +91,8 @@ class PinnedSource:
     # every connection, so no digest of it can be pinned.
     remote: bool = False
     # False when the declared ``source`` (the observed-digest key) is not the
-    # command, url or prompt that will run, so a digest observed for the key
-    # says nothing about what runs.
+    # command line, url or prompt that will run, so a digest observed for the
+    # key says nothing about what runs.
     bound: bool = True
 
     @property
@@ -134,7 +135,8 @@ class SupplyManifest:
         """
         reasons: list[DenyReason] = []
         if self.mcp_servers and (
-            any(server.remote for server in self.mcp_servers)
+            any(server.remote or not server.bound for server in self.mcp_servers)
+            or _shares_a_key(self.mcp_servers)
             or not _observed_matches_pins(self.mcp_servers, observed_mcp_servers)
         ):
             reasons.append(DenyReason.MCP_SERVER_UNPINNED)
@@ -187,8 +189,10 @@ def _mcp_entry(entry: Any) -> PinnedSource:
         transport = transport.lower()
         if transport not in _MCP_TYPES:
             raise ManifestError(f"mcp_servers type is not understood: {transport!r}")
+    args: list[str] = []
     if "args" in entry and entry["args"] is not None:
         _require_string_list(entry["args"], "mcp_servers args")
+        args = list(entry["args"])
     if "env" in entry and entry["env"] is not None:
         _require_string_map(entry["env"], "mcp_servers env")
     if "headers" in entry and entry["headers"] is not None:
@@ -199,12 +203,17 @@ def _mcp_entry(entry: Any) -> PinnedSource:
         raise ManifestError("remote mcp server needs a url")
     if transport == "stdio" and command is None and source is None:
         raise ManifestError("stdio mcp server needs a command")
+    # The digest is observed for what launches: the whole command line, not the
+    # bare command, so ``npx good`` and ``npx evil@latest`` are different keys.
+    launch = shlex.join([command, *args]) if command is not None else None
+    runs = {value for value in (launch, url) if value is not None}
     if source is None:
-        source = url or command
+        source = launch or url
     if source is None:
         raise ManifestError("mcp_servers entry needs a source")
     remote = transport in _MCP_REMOTE_TYPES or (url is not None and command is None)
-    return PinnedSource(source=source, pin=_pin_value(entry), remote=remote)
+    bound = not runs or runs == {source}
+    return PinnedSource(source=source, pin=_pin_value(entry), remote=remote, bound=bound)
 
 
 def _hooks(values: list[Any]) -> tuple[PinnedSource, ...]:

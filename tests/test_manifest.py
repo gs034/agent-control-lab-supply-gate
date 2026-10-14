@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 import pytest
 
 from supply_gate.adapters import RecordingStubAdapter, gated_install_or_update
@@ -213,7 +215,7 @@ _REAL_HOOKS = {
     "https://hooks.example.invalid/session": HOOK_B,
 }
 # What the adapter observed for each declared MCP server, keyed like hooks.
-_REAL_MCP = {"npx": PIN}
+_REAL_MCP = {"npx -y mcp-files": PIN}
 
 
 def test_real_shape_manifest_allows_when_pinned_and_head_matches() -> None:
@@ -448,9 +450,12 @@ def test_plain_rules_still_allow(value: str) -> None:
 def test_mcp_pin_alone_is_not_a_verified_server(server: dict) -> None:
     manifest = {"mcpServers": {"x": server}}
     assert _evaluate(manifest).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
-    wrong = {server["command"]: "e" * 40}
+    launch = shlex.join([server["command"], *server["args"]])
+    wrong = {launch: "e" * 40}
     assert _evaluate(manifest, observed_mcp_servers=wrong).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
-    seen = {server["command"]: server["pin"]}
+    bare = {server["command"]: server["pin"]}
+    assert _evaluate(manifest, observed_mcp_servers=bare).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+    seen = {launch: server["pin"]}
     assert _evaluate(manifest, observed_mcp_servers=seen).verdict is Verdict.ALLOW
 
 
@@ -480,7 +485,7 @@ def test_gated_path_forwards_observed_mcp_digests() -> None:
     assert pinned_only.reasons == (DenyReason.MCP_SERVER_UNPINNED,)
     observed = gated_install_or_update(
         envelope,
-        RecordingStubAdapter(PIN, observed_mcp_servers={"npx": PIN}),
+        RecordingStubAdapter(PIN, observed_mcp_servers={"npx -y m": PIN}),
         update_policy=policy,
         allowlist=allow,
         use_env=False,
@@ -624,3 +629,30 @@ def test_two_hooks_sharing_one_observed_key_is_unverified(manifest: dict) -> Non
     """One observed digest cannot vouch for two declared hooks."""
     seen = {"hooks/format.py": HOOK_PIN}
     assert _evaluate(manifest, observed_hooks=seen).reasons == (DenyReason.HOOK_UPDATE_UNVERIFIED,)
+
+
+@pytest.mark.parametrize(
+    "servers",
+    [
+        # An explicit source that is not what launches.
+        {"x": {"source": "npx -y mcp-files", "command": "npx", "args": ["-y", "evil-mcp@latest"], "pin": PIN}},
+        {"x": {"source": "npx", "command": "npx", "args": ["-y", "mcp-files"], "pin": PIN}},
+        {"x": {"source": "npx -y mcp-files", "command": "npx", "url": "https://mcp.example.invalid/s", "pin": PIN}},
+        # Two servers resolving to one observed-digest key.
+        {
+            "a": {"command": "npx", "args": ["-y", "mcp-files"], "pin": PIN},
+            "b": {"source": "npx -y mcp-files", "pin": PIN},
+        },
+    ],
+)
+def test_mcp_source_not_tied_to_what_launches_is_unpinned(servers: dict) -> None:
+    seen = {"npx -y mcp-files": PIN, "npx": PIN}
+    assert _evaluate({"mcpServers": servers}, observed_mcp_servers=seen).reasons == (
+        DenyReason.MCP_SERVER_UNPINNED,
+    )
+
+
+def test_mcp_source_equal_to_its_launch_line_still_allows() -> None:
+    server = {"source": "npx -y mcp-files", "command": "npx", "args": ["-y", "mcp-files"], "pin": PIN}
+    seen = {"npx -y mcp-files": PIN}
+    assert _evaluate({"mcpServers": {"x": server}}, observed_mcp_servers=seen).verdict is Verdict.ALLOW
