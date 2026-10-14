@@ -12,8 +12,8 @@ permissions object or string, and a lifecycle-event hook map.
 
 from __future__ import annotations
 
+import json
 import re
-import shlex
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -90,10 +90,15 @@ class PinnedSource:
     # A remote MCP server (http / sse / streamable-http) is fetched live on
     # every connection, so no digest of it can be pinned.
     remote: bool = False
-    # False when the declared ``source`` (the observed-digest key) is not the
-    # command line, url or prompt that will run, so a digest observed for the
-    # key says nothing about what runs.
-    bound: bool = True
+    # What actually launches, as the adapter must key its observation: the
+    # source for a plain source entry, otherwise a canonical record of the
+    # command, args, env and cwd (or the url / prompt). An author-chosen
+    # ``source`` label alone never selects the observation for a command.
+    launch: str = ""
+
+    @property
+    def launch_key(self) -> str:
+        return self.launch or self.source
 
     @property
     def pinned(self) -> bool:
@@ -135,18 +140,14 @@ class SupplyManifest:
         """
         reasons: list[DenyReason] = []
         if self.mcp_servers and (
-            any(server.remote or not server.bound for server in self.mcp_servers)
-            or _shares_a_key(self.mcp_servers)
+            any(server.remote for server in self.mcp_servers)
+            or _duplicate_keys(self.mcp_servers)
             or not _observed_matches_pins(self.mcp_servers, observed_mcp_servers)
         ):
             reasons.append(DenyReason.MCP_SERVER_UNPINNED)
         if self.shell_preapproved:
             reasons.append(DenyReason.SKILL_SHELL_PREAPPROVED)
-        if self.hooks and (
-            not all(hook.bound for hook in self.hooks)
-            or _shares_a_key(self.hooks)
-            or not _observed_matches_pins(self.hooks, observed_hooks)
-        ):
+        if self.hooks and (_duplicate_keys(self.hooks) or not _observed_matches_pins(self.hooks, observed_hooks)):
             reasons.append(DenyReason.HOOK_UPDATE_UNVERIFIED)
         return tuple(reasons)
 
@@ -189,10 +190,8 @@ def _mcp_entry(entry: Any) -> PinnedSource:
         transport = transport.lower()
         if transport not in _MCP_TYPES:
             raise ManifestError(f"mcp_servers type is not understood: {transport!r}")
-    args: list[str] = []
     if "args" in entry and entry["args"] is not None:
         _require_string_list(entry["args"], "mcp_servers args")
-        args = list(entry["args"])
     if "env" in entry and entry["env"] is not None:
         _require_string_map(entry["env"], "mcp_servers env")
     if "headers" in entry and entry["headers"] is not None:
@@ -203,17 +202,21 @@ def _mcp_entry(entry: Any) -> PinnedSource:
         raise ManifestError("remote mcp server needs a url")
     if transport == "stdio" and command is None and source is None:
         raise ManifestError("stdio mcp server needs a command")
-    # The digest is observed for what launches: the whole command line, not the
-    # bare command, so ``npx good`` and ``npx evil@latest`` are different keys.
-    launch = shlex.join([command, *args]) if command is not None else None
-    runs = {value for value in (launch, url) if value is not None}
     if source is None:
-        source = launch or url
+        source = url or command
     if source is None:
         raise ManifestError("mcp_servers entry needs a source")
     remote = transport in _MCP_REMOTE_TYPES or (url is not None and command is None)
-    bound = not runs or runs == {source}
-    return PinnedSource(source=source, pin=_pin_value(entry), remote=remote, bound=bound)
+    launch = ""
+    if command is not None:
+        launch = _launch_record(
+            "command",
+            command=command,
+            args=list(entry.get("args") or []),
+            env=dict(entry.get("env") or {}),
+            cwd=entry.get("cwd"),
+        )
+    return PinnedSource(source=source, pin=_pin_value(entry), remote=remote, launch=launch)
 
 
 def _hooks(values: list[Any]) -> tuple[PinnedSource, ...]:
@@ -295,16 +298,19 @@ def _hook_command(entry: Mapping[str, Any]) -> PinnedSource:
         timeout = entry["timeout"]
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise ManifestError("hook timeout must be a number")
-    runs = {value for value in (command, url, prompt) if value is not None}
     source = _optional_str(entry, "source")
     if source is None:
         source = command or url or prompt
     if source is None:
         raise ManifestError("hooks entry needs a source")
-    # The digest is observed for ``source``. It is bound only when it names the
-    # one command, url or prompt the hook runs.
-    bound = not runs or runs == {source}
-    return PinnedSource(source=source, pin=_pin_value(entry), bound=bound)
+    # A hook runs its command, url or prompt; that string is the observation key.
+    # A hook carrying two different ones would be keyed by one while the host
+    # may run the other, so no observation can vouch for it.
+    runs = {value for value in (command, url, prompt) if value is not None}
+    if len(runs) > 1:
+        raise ManifestError("hooks entry names more than one distinct command, url or prompt")
+    launch = command or url or prompt or ""
+    return PinnedSource(source=source, pin=_pin_value(entry), launch=launch)
 
 
 def _shell_preapproved(values: list[Any]) -> bool:
@@ -431,19 +437,36 @@ def _split_rules(text: str) -> list[str]:
     return rules
 
 
-def _shares_a_key(entries: tuple[PinnedSource, ...]) -> bool:
-    """True when two entries resolve to one observed-digest key, so one digest would vouch for both."""
-    return len({entry.source for entry in entries}) != len(entries)
+def _launch_record(kind: str, **fields: Any) -> str:
+    """Canonical text naming what launches; the key an adapter reports its digest under."""
+    return json.dumps({"kind": kind, **fields}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def mcp_observation_key(entry: Mapping[str, Any]) -> str:
+    """The key an adapter must report a local MCP server's digest under.
+
+    For a server with a ``command`` it is a canonical record of command, args,
+    env and cwd, so the digest is bound to what launches and not to an
+    author-chosen ``source`` label. A plain ``source`` entry keys by source.
+    """
+    return _mcp_entry(entry).launch_key
+
+
+def _duplicate_keys(entries: tuple[PinnedSource, ...]) -> bool:
+    """Two entries sharing a source label or a launch record cannot each be checked by one observation."""
+    sources = [entry.source for entry in entries]
+    launches = [entry.launch_key for entry in entries]
+    return len(set(sources)) != len(sources) or len(set(launches)) != len(launches)
 
 
 def _observed_matches_pins(entries: tuple[PinnedSource, ...], observed: Any) -> bool:
-    """Every entry is pinned and the adapter observed exactly that digest for its source."""
+    """Every entry is pinned and the adapter observed exactly that digest for what it launches."""
     if not isinstance(observed, Mapping):
         return False
     for entry in entries:
         if not entry.pinned:
             return False
-        seen = observed.get(entry.source)
+        seen = observed.get(entry.launch_key)
         if not isinstance(seen, str):
             return False
         seen_n = seen.strip().lower()
