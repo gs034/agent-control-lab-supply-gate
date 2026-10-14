@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8,<10"]
 
 [project.scripts]
 supply-gate-demo = "supply_gate.demo:main"
