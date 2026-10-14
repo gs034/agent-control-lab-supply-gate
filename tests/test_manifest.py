@@ -552,6 +552,16 @@ def test_shell_aliases_are_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
+@pytest.mark.parametrize("value", ["eval", "su", "/bin/su", "su.exe", "Bash(eval ...)"])
+def test_eval_and_su_grants_stay_denied(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["eval_runner", "run_eval", "mcp__lab__eval", "su-docs"])
+def test_underscore_or_hyphen_does_not_make_eval_or_su_a_shell_grant(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
 @pytest.mark.parametrize("value", ["Bash2", "pwsh7(*)", "sh3", "run-command", "shell_v2"])
 def test_versioned_shell_names_are_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
