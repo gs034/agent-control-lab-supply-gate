@@ -89,6 +89,10 @@ class PinnedSource:
     # A remote MCP server (http / sse / streamable-http) is fetched live on
     # every connection, so no digest of it can be pinned.
     remote: bool = False
+    # False when the declared ``source`` (the observed-digest key) is not the
+    # command, url or prompt that will run, so a digest observed for the key
+    # says nothing about what runs.
+    bound: bool = True
 
     @property
     def pinned(self) -> bool:
@@ -136,7 +140,11 @@ class SupplyManifest:
             reasons.append(DenyReason.MCP_SERVER_UNPINNED)
         if self.shell_preapproved:
             reasons.append(DenyReason.SKILL_SHELL_PREAPPROVED)
-        if self.hooks and not _observed_matches_pins(self.hooks, observed_hooks):
+        if self.hooks and (
+            not all(hook.bound for hook in self.hooks)
+            or _shares_a_key(self.hooks)
+            or not _observed_matches_pins(self.hooks, observed_hooks)
+        ):
             reasons.append(DenyReason.HOOK_UPDATE_UNVERIFIED)
         return tuple(reasons)
 
@@ -278,12 +286,16 @@ def _hook_command(entry: Mapping[str, Any]) -> PinnedSource:
         timeout = entry["timeout"]
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise ManifestError("hook timeout must be a number")
+    runs = {value for value in (command, url, prompt) if value is not None}
     source = _optional_str(entry, "source")
     if source is None:
         source = command or url or prompt
     if source is None:
         raise ManifestError("hooks entry needs a source")
-    return PinnedSource(source=source, pin=_pin_value(entry))
+    # The digest is observed for ``source``. It is bound only when it names the
+    # one command, url or prompt the hook runs.
+    bound = not runs or runs == {source}
+    return PinnedSource(source=source, pin=_pin_value(entry), bound=bound)
 
 
 def _shell_preapproved(values: list[Any]) -> bool:
@@ -408,6 +420,11 @@ def _split_rules(text: str) -> list[str]:
     if current:
         rules.append("".join(current))
     return rules
+
+
+def _shares_a_key(entries: tuple[PinnedSource, ...]) -> bool:
+    """True when two entries resolve to one observed-digest key, so one digest would vouch for both."""
+    return len({entry.source for entry in entries}) != len(entries)
 
 
 def _observed_matches_pins(entries: tuple[PinnedSource, ...], observed: Any) -> bool:
