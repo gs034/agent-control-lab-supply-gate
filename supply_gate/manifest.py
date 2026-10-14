@@ -33,11 +33,23 @@ _KEY_ALIASES = {
 }
 # Fixed shell-class vocabulary, matched as whole words in the permission head
 # (the part before any "(" argument). Underscores separate words so an MCP tool
-# named like mcp__shell__run is caught. A bare wildcard head grants shell too.
+# named like mcp__shell__run is caught, and digits do not end a word, so a
+# versioned name like bash2 or pwsh7 is caught too. The list names shells and
+# shell-launch verbs only. Interpreters (python, node, ruby, perl) are not
+# shells here; a host that treats them as shell-equivalent needs its own rule.
+# Whole-word matching also denies a namespace segment that is a shell word
+# (mcp__ash__x, a.sh); that is the fail-closed side of the trade.
 _SHELL_WORDS = re.compile(
-    r"(?:^|[^a-z0-9])(?:bash|sh|shell|exec|execute|cmd|powershell|zsh|terminal|run_command)(?:[^a-z0-9]|$)"
+    r"(?:^|[^a-z])(?:"
+    r"bash|sh|shell|exec|execute|cmd|powershell|pwsh|zsh|terminal|run_command|run-command"
+    r"|ash|dash|fish|ksh|csh|tcsh|busybox"
+    r")(?:[^a-z]|$)"
 )
+# A bare wildcard head grants everything. A glob character anywhere in a head
+# (``Ba*``, ``B?sh``, ``*ash``) may match a shell-class tool on the host that
+# expands it, so it is treated as a possible shell grant and denied.
 _WILDCARDS = frozenset({"*", "all"})
+_GLOB_CHARACTERS = frozenset({"*", "?"})
 # Invisible characters outside Unicode category Cf that a host may drop or split on.
 _INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0})
 # A rule head is a plain tool name: letters, digits and the punctuation tool names use.
@@ -316,7 +328,7 @@ def _reading_grants_shell(reading: str) -> bool:
         head = rule.split("(", 1)[0].strip()
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
-        if head in _WILDCARDS or _SHELL_WORDS.search(head):
+        if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
             return True
     return False
 

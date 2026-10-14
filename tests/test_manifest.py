@@ -431,3 +431,50 @@ def test_text_glued_after_a_rule_or_a_non_tool_name_is_invalid(value: str) -> No
 )
 def test_plain_rules_still_allow(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Ba*",
+        "Ba*(*)",
+        "B*(*)",
+        "*ash",
+        "B?sh(ls)",
+        "Read(src/**) Ba*(x)",
+        "Read(*.sh), Ba*",
+        "mcp__*__run",
+    ],
+)
+def test_glob_in_a_rule_head_is_a_possible_shell_grant(value: str) -> None:
+    """A head with a glob character may expand to a shell-class tool on the host, so it is denied."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["Read(*)", "Edit(scripts/**/*.sh)", "Grep(?)", "Read(a*b)"])
+def test_glob_inside_the_argument_is_not_a_head_glob(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["fish", "fish(*)", "ksh(*)", "dash", "csh", "tcsh", "ash", "pwsh(*)", "busybox", "Tool:dash", "mcp__fish__run"],
+)
+def test_shell_aliases_are_shell_class(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["Bash2", "pwsh7(*)", "sh3", "run-command", "shell_v2"])
+def test_versioned_shell_names_are_shell_class(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["hash", "dashboard", "fishing", "cashier", "ashes", "trash", "Publish"])
+def test_words_containing_a_shell_alias_are_not_shell_class(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize("value", ["python(*)", "node(*)", "ruby", "perl(*)"])
+def test_interpreter_heads_are_not_shell_class_here(value: str) -> None:
+    """Pinned: interpreters are not in the shell list. A host that treats them as shells needs its own rule."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
