@@ -38,6 +38,8 @@ class MaterialiseResult:
     observed_head: str | None
     notes: str = "stub"
     observed_hooks: Mapping[str, str] | None = None
+    # Digest of each declared MCP server as materialised, keyed like observed_hooks.
+    observed_mcp_servers: Mapping[str, str] | None = None
 
 
 class InstallerAdapter(Protocol):
@@ -56,15 +58,18 @@ class RecordingStubAdapter:
         observed_head: str | None,
         *,
         observed_hooks: Mapping[str, str] | None = None,
+        observed_mcp_servers: Mapping[str, str] | None = None,
     ) -> None:
         self._observed_head = observed_head
         self._observed_hooks = observed_hooks
+        self._observed_mcp_servers = observed_mcp_servers
 
     def materialise(self, request: MaterialiseRequest) -> MaterialiseResult:
         return MaterialiseResult(
             origin=request.origin,
             observed_head=self._observed_head,
             observed_hooks=self._observed_hooks,
+            observed_mcp_servers=self._observed_mcp_servers,
         )
 
 
@@ -105,10 +110,12 @@ class LocalWorktreeAdapter:
         *,
         worktree: str | Path | None = None,
         observed_hooks: Mapping[str, str] | None = None,
+        observed_mcp_servers: Mapping[str, str] | None = None,
     ) -> None:
         self._observed_head = observed_head
         self._worktree = worktree
         self._observed_hooks = observed_hooks
+        self._observed_mcp_servers = observed_mcp_servers
 
     def materialise(self, request: MaterialiseRequest) -> MaterialiseResult:
         head = caller_supplied_head(self._observed_head, worktree=self._worktree)
@@ -117,6 +124,7 @@ class LocalWorktreeAdapter:
             observed_head=head,
             notes="local-worktree",
             observed_hooks=self._observed_hooks,
+            observed_mcp_servers=self._observed_mcp_servers,
         )
 
 
@@ -197,6 +205,7 @@ def gated_install_or_update(
         untrusted_prose=untrusted_prose,
         extra_reasons=tuple(extra),
         observed_hooks=result.observed_hooks,
+        observed_mcp_servers=result.observed_mcp_servers,
     )
 
 

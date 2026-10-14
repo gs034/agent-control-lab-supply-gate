@@ -38,13 +38,14 @@ def evaluate(
     untrusted_prose: str | None = None,
     extra_reasons: tuple[DenyReason, ...] = (),
     observed_hooks: Mapping[str, str] | None = None,
+    observed_mcp_servers: Mapping[str, str] | None = None,
 ) -> Decision:
     """Host-side gate. Marketplace/agent prose is untrusted data and cannot skip verify.
 
     A declared ``manifest`` (MCP servers, permissions, lifecycle hooks) is read
-    only to deny: unpinned MCP servers, shell pre-approval a manifest grants
-    itself, and hooks without a pin or without a matching observed digest
-    are DENY.
+    only to deny: MCP servers and hooks without a pin or without a matching
+    observed digest (``observed_mcp_servers`` / ``observed_hooks``), remote
+    MCP servers, and shell pre-approval a manifest grants itself are DENY.
 
     ALLOW only when the envelope parses, origin is allowlisted, kill is off,
     observed HEAD is present, and that HEAD exactly matches the pinned digest.
@@ -99,7 +100,7 @@ def evaluate(
 
     if parsed is not None and parsed.manifest is not None:
         if isinstance(parsed.manifest, SupplyManifest):
-            reasons.extend(parsed.manifest.deny_reasons(observed_hooks))
+            reasons.extend(parsed.manifest.deny_reasons(observed_hooks, observed_mcp_servers))
         else:
             # A manifest object the gate did not parse is not trusted.
             reasons.append(DenyReason.ENVELOPE_INVALID)

@@ -66,6 +66,9 @@ class ManifestError(ValueError):
 class PinnedSource:
     source: str
     pin: str | None
+    # A remote MCP server (http / sse / streamable-http) is fetched live on
+    # every connection, so no digest of it can be pinned.
+    remote: bool = False
 
     @property
     def pinned(self) -> bool:
@@ -94,13 +97,26 @@ class SupplyManifest:
             shell_preapproved=_shell_preapproved(fields["permissions"]),
         )
 
-    def deny_reasons(self, observed_hooks: Any) -> tuple[DenyReason, ...]:
+    def deny_reasons(
+        self,
+        observed_hooks: Any,
+        observed_mcp_servers: Any = None,
+    ) -> tuple[DenyReason, ...]:
+        """Deny reasons from the manifest alone.
+
+        A pin is a claim by the artefact's author. An MCP server or hook is
+        accepted only when the adapter observed a digest of what will run and
+        that digest equals the pin; a remote MCP server can never be pinned.
+        """
         reasons: list[DenyReason] = []
-        if any(not server.pinned for server in self.mcp_servers):
+        if self.mcp_servers and (
+            any(server.remote for server in self.mcp_servers)
+            or not _observed_matches_pins(self.mcp_servers, observed_mcp_servers)
+        ):
             reasons.append(DenyReason.MCP_SERVER_UNPINNED)
         if self.shell_preapproved:
             reasons.append(DenyReason.SKILL_SHELL_PREAPPROVED)
-        if self.hooks and not _hooks_verified(self.hooks, observed_hooks):
+        if self.hooks and not _observed_matches_pins(self.hooks, observed_hooks):
             reasons.append(DenyReason.HOOK_UPDATE_UNVERIFIED)
         return tuple(reasons)
 
@@ -159,7 +175,8 @@ def _mcp_entry(entry: Any) -> PinnedSource:
         source = url or command
     if source is None:
         raise ManifestError("mcp_servers entry needs a source")
-    return PinnedSource(source=source, pin=_pin_value(entry))
+    remote = transport in _MCP_REMOTE_TYPES or (url is not None and command is None)
+    return PinnedSource(source=source, pin=_pin_value(entry), remote=remote)
 
 
 def _hooks(values: list[Any]) -> tuple[PinnedSource, ...]:
@@ -364,17 +381,18 @@ def _split_rules(text: str) -> list[str]:
     return rules
 
 
-def _hooks_verified(hooks: tuple[PinnedSource, ...], observed: Any) -> bool:
+def _observed_matches_pins(entries: tuple[PinnedSource, ...], observed: Any) -> bool:
+    """Every entry is pinned and the adapter observed exactly that digest for its source."""
     if not isinstance(observed, Mapping):
         return False
-    for hook in hooks:
-        if not hook.pinned:
+    for entry in entries:
+        if not entry.pinned:
             return False
-        seen = observed.get(hook.source)
+        seen = observed.get(entry.source)
         if not isinstance(seen, str):
             return False
         seen_n = seen.strip().lower()
-        if not digest_ok(seen_n) or seen_n != hook.pin:
+        if not digest_ok(seen_n) or seen_n != entry.pin:
             return False
     return True
 
