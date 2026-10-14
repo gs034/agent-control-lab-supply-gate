@@ -54,6 +54,14 @@ _GLOB_CHARACTERS = frozenset({"*", "?"})
 _INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0})
 # A rule head is a plain tool name: letters, digits and the punctuation tool names use.
 _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
+# A host that splits a rule string without tracking parentheses can read a word
+# inside an argument as a rule of its own (``Read(a, Bash)``). The argument is
+# cut on commas and parentheses, and a piece that is a bare tool name is judged
+# with the same shell-word match as a head. Glob characters, paths, dots and
+# hyphens are the ordinary argument syntax (``Read(*)``, ``Write(cmd.txt)``,
+# ``Skill(exec-plan)``), so a piece carrying any of them is not a tool name here.
+_ARGUMENT_SPLIT = re.compile(r"[,()]")
+_ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+")
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
@@ -346,6 +354,15 @@ def _reading_grants_shell(reading: str) -> bool:
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
+            return True
+    return _argument_names_shell(reading)
+
+
+def _argument_names_shell(reading: str) -> bool:
+    """True when a bare tool name inside a rule's parentheses is shell-class."""
+    for piece in _ARGUMENT_SPLIT.split(reading):
+        name = piece.strip()
+        if _ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name):
             return True
     return False
 

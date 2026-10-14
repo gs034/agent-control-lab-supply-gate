@@ -533,3 +533,40 @@ def test_words_containing_a_shell_alias_are_not_shell_class(value: str) -> None:
 def test_interpreter_heads_are_not_shell_class_here(value: str) -> None:
     """Pinned: interpreters are not in the shell list. A host that treats them as shells needs its own rule."""
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Read(a, Bash, b)", "Read(x,Bash)", "Read( bash )", "Read(Read(Bash))", "Grep(*, shell)", "Read(x, Tool:dash)"],
+)
+def test_shell_tool_name_inside_parentheses_is_denied(value: str) -> None:
+    """A host that splits rules without tracking parentheses would read the inner name as a rule."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+def test_shell_rule_in_a_bare_parenthesis_group_is_denied() -> None:
+    assert _evaluate({"allowed-tools": "Edit(a) (Bash)"}).verdict is Verdict.DENY
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(*)",
+        "Edit(scripts/**/*.sh)",
+        "Grep(?)",
+        "Read(a*b)",
+        "Read(bash notes/**)",
+        "Write(cmd.txt)",
+        "Skill(exec-plan)",
+        "WebFetch(domain:sh.example)",
+        "Read(a, hash, dashboard)",
+        "Read(notes/bash/*)",
+    ],
+)
+def test_argument_text_that_is_not_a_bare_tool_name_still_allows(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+def test_shell_name_in_a_denied_or_asked_argument_is_not_a_grant() -> None:
+    assert _evaluate({"permissions": {"deny": ["Read(a, Bash)"], "ask": ["Edit(x,shell)"]}}).verdict is Verdict.ALLOW
