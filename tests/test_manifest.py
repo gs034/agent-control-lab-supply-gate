@@ -387,3 +387,47 @@ def test_manifest_absent_leaves_receipt_shape_unchanged() -> None:
     )
     assert decision.verdict is Verdict.ALLOW
     assert "manifest" not in decision.receipt
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read\ufeffBash",
+        "Read(x)\ufeffBash(*)",
+        "Grep\ufeff*",
+        "Read\u200bBash",
+        "B\u00adash",
+        "Read\u2063Bash",
+        "Read\u180eBash",
+        "B\u034fash",
+    ],
+)
+def test_invisible_characters_cannot_hide_a_shell_rule(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(x)Bash(*)",
+        "Read(src/**);Bash(*)",
+        "Read(a)|Bash",
+        "Read(a)&Bash",
+        "Read(a)/Bash",
+        "Read(a(b)c)Bash",
+        "Read(a\uff09Bash(*)",
+        "Read;Bash[*]",
+        "(x)",
+        "Bash{*}",
+    ],
+)
+def test_text_glued_after_a_rule_or_a_non_tool_name_is_invalid(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.ENVELOPE_INVALID,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Read(*.sh) Grep", "Read(x)\tGrep", "WebFetch(domain:sh.example)", "mcp__my-server__read_file", "Read\ufeff"],
+)
+def test_plain_rules_still_allow(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW

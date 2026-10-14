@@ -38,7 +38,10 @@ _SHELL_WORDS = re.compile(
     r"(?:^|[^a-z0-9])(?:bash|sh|shell|exec|execute|cmd|powershell|zsh|terminal|run_command)(?:[^a-z0-9]|$)"
 )
 _WILDCARDS = frozenset({"*", "all"})
-_ZERO_WIDTH = dict.fromkeys((0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF), None)
+# Invisible characters outside Unicode category Cf that a host may drop or split on.
+_INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0})
+# A rule head is a plain tool name: letters, digits and the punctuation tool names use.
+_RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
@@ -290,32 +293,65 @@ def _is_shell_grant(item: str) -> bool:
 
     A string may carry several rules (``Read(src/**) Bash(*)``). Each rule is
     judged on its own head, so a benign parenthesised rule cannot hide the next.
+    An invisible format character may be dropped by one host and read as a
+    separator by another, so both readings are judged and either one denies.
     """
-    norm = unicodedata.normalize("NFKC", item).translate(_ZERO_WIDTH).lower()
-    for rule in _split_rules(norm):
+    norm = unicodedata.normalize("NFKC", item).lower()
+    invalid: ManifestError | None = None
+    # Fixed order, every reading judged: a shell grant in any reading wins over
+    # an ill-formed one, so the deny reason does not depend on evaluation order.
+    for reading in (_strip_invisible(norm, " "), _strip_invisible(norm, "")):
+        try:
+            if _reading_grants_shell(reading):
+                return True
+        except ManifestError as exc:
+            invalid = invalid or exc
+    if invalid is not None:
+        raise invalid
+    return False
+
+
+def _reading_grants_shell(reading: str) -> bool:
+    for rule in _split_rules(reading):
         head = rule.split("(", 1)[0].strip()
+        if not _RULE_HEAD.fullmatch(head):
+            raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _SHELL_WORDS.search(head):
             return True
     return False
+
+
+def _strip_invisible(text: str, replacement: str) -> str:
+    return "".join(
+        replacement if (unicodedata.category(char) == "Cf" or ord(char) in _INVISIBLE) else char
+        for char in text
+    )
 
 
 def _split_rules(text: str) -> list[str]:
     """Split a permission string into ``Tool`` / ``Tool(pattern)`` rules.
 
     Whitespace and commas separate rules outside parentheses. Unbalanced
-    parentheses are ill-formed: the gate cannot tell where a rule ends.
+    parentheses, or text glued to a closing ``)``, are ill-formed: the gate
+    cannot tell where a rule ends.
     """
     rules: list[str] = []
     current: list[str] = []
     depth = 0
+    closed = False
     for char in text:
+        separator = depth == 0 and (char == "," or char.isspace())
+        if closed and not separator:
+            raise ManifestError("permissions rule has text after its closing ')'")
+        closed = False
         if char == "(":
             depth += 1
         elif char == ")":
             if depth == 0:
                 raise ManifestError("permissions rule has an unbalanced ')'")
             depth -= 1
-        elif depth == 0 and (char == "," or char.isspace()):
+            closed = depth == 0
+        elif separator:
             if current:
                 rules.append("".join(current))
                 current = []
