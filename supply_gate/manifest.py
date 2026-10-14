@@ -40,13 +40,16 @@ _KEY_ALIASES = {
 # shells here; a host that treats them as shell-equivalent needs its own rule.
 # Whole-word matching also denies a namespace segment that is a shell word
 # (mcp__ash__x, a.sh); that is the fail-closed side of the trade.
-# Launch wrappers (env, sudo, doas, xargs, nohup) and shells nu, xonsh, and
-# elvish are in this same list: a permission rule that names one is a shell grant.
+# Launch wrappers (env, sudo, doas, xargs, nohup, pkexec, su, runuser, setsid,
+# chroot, unshare, nsenter) and shells nu, xonsh, and elvish are in this same
+# list, with eval as a shell-launch verb. A permission rule that names one is
+# a shell grant.
 _SHELL_WORDS = re.compile(
     r"(?:^|[^a-z])(?:"
     r"bash|sh|shell|exec|execute|cmd|powershell|pwsh|zsh|terminal|run_command|run-command"
     r"|ash|dash|fish|ksh|csh|tcsh|busybox"
     r"|env|sudo|doas|xargs|nohup|nu|xonsh|elvish"
+    r"|pkexec|runuser|setsid|chroot|unshare|nsenter|eval|su"
     r")(?:[^a-z]|$)"
 )
 # A bare wildcard head grants everything. A glob character anywhere in a head

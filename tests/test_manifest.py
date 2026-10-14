@@ -538,6 +538,14 @@ def test_glob_inside_the_argument_is_not_a_head_glob(value: str) -> None:
         "nu",
         "xonsh",
         "elvish",
+        "pkexec",
+        "su",
+        "runuser",
+        "setsid",
+        "chroot",
+        "unshare",
+        "nsenter",
+        "eval",
     ],
 )
 def test_shell_aliases_are_shell_class(value: str) -> None:
@@ -563,6 +571,17 @@ def test_versioned_shell_names_are_shell_class(value: str) -> None:
         "nushell-docs",
         "sudoers",
         "elvishness",
+        "sugar",
+        "super",
+        "issue",
+        "result",
+        "evaluate",
+        "pkexecutable",
+        "runusers",
+        "setsides",
+        "chroots",
+        "unshared",
+        "nsentered",
     ],
 )
 def test_words_containing_a_shell_alias_are_not_shell_class(value: str) -> None:
