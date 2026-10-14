@@ -518,7 +518,27 @@ def test_glob_inside_the_argument_is_not_a_head_glob(value: str) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["fish", "fish(*)", "ksh(*)", "dash", "csh", "tcsh", "ash", "pwsh(*)", "busybox", "Tool:dash", "mcp__fish__run"],
+    [
+        "fish",
+        "fish(*)",
+        "ksh(*)",
+        "dash",
+        "csh",
+        "tcsh",
+        "ash",
+        "pwsh(*)",
+        "busybox",
+        "Tool:dash",
+        "mcp__fish__run",
+        "env",
+        "sudo",
+        "doas",
+        "xargs",
+        "nohup",
+        "nu",
+        "xonsh",
+        "elvish",
+    ],
 )
 def test_shell_aliases_are_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
@@ -529,7 +549,22 @@ def test_versioned_shell_names_are_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
-@pytest.mark.parametrize("value", ["hash", "dashboard", "fishing", "cashier", "ashes", "trash", "Publish"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "hash",
+        "dashboard",
+        "fishing",
+        "cashier",
+        "ashes",
+        "trash",
+        "Publish",
+        "environment",
+        "nushell-docs",
+        "sudoers",
+        "elvishness",
+    ],
+)
 def test_words_containing_a_shell_alias_are_not_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
 
