@@ -41,11 +41,15 @@ _KEY_ALIASES = {
 # Whole-word matching also denies a namespace segment that is a shell word
 # (mcp__ash__x, a.sh); that is the fail-closed side of the trade.
 _SHELL_WORDS = re.compile(
-    r"(?:^|[^a-z])(?:"
+    r"(?:^|[^a-z])(?P<word>"
     r"bash|sh|shell|exec|execute|cmd|powershell|pwsh|zsh|terminal|run_command|run-command"
     r"|ash|dash|fish|ksh|csh|tcsh|busybox"
-    r")(?:[^a-z]|$)"
+    r")(?P<tail>[^a-z]|$)"
 )
+# A glob or one of these marks glued straight onto a shell word (``bash*``,
+# ``bash?``, ``bash/*``, ``bash=*``). A dot stays out of this set so a file
+# name such as ``cmd.txt`` is not a tool spelling.
+_STUCK_MARKS = frozenset({"*", "?", "/", "="})
 # A bare wildcard head grants everything. A glob character anywhere in a head
 # (``Ba*``, ``B?sh``, ``*ash``) may match a shell-class tool on the host that
 # expands it, so it is treated as a possible shell grant and denied.
@@ -62,10 +66,12 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # and a host that ignores parentheses would apply that cut inside the argument.
 # A piece that is a bare tool name, a ``.exe`` variant, a hyphen-suffix
 # variant, or a colon-suffix variant (``bash.exe``, ``bash-x``, ``bash:*``,
-# ``bash:ls``) is judged with the same shell-word match as a head. A glob
-# outside a colon suffix, and ``/``, stay argument syntax
-# (``Read(*)``, ``Edit(scripts/**/*.sh)``), as does a dotted name that is not
-# a ``.exe`` variant (``Write(cmd.txt)``).
+# ``bash:ls``) is judged with the same shell-word match as a head. A glob or
+# punctuation mark glued straight onto that word (``bash*``, ``bash?``,
+# ``bash/*``, ``bash=*``) is judged the same way a rule head ``bash*`` is.
+# A normal path and a ``domain:`` rule stay argument syntax
+# (``notes/bash/*``, ``scripts/**/*.sh``, ``domain:sh.example``), as does a
+# dotted name that is not a ``.exe`` variant (``Write(cmd.txt)``).
 _ARGUMENT_SPLIT = re.compile(r"[,();|\s]+")
 _ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
 _MCP_ENTRY_KEYS = frozenset(
@@ -383,6 +389,10 @@ def _is_shell_grant(item: str) -> bool:
 def _reading_grants_shell(reading: str) -> bool:
     for rule in _split_rules(reading):
         head = rule.split("(", 1)[0].strip()
+        # A shell grant wins over an ill-formed head, so ``Bash=*`` is denied
+        # the same way ``Bash*`` is, rather than failing the name check first.
+        if _stuck_on_shell(head):
+            return True
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
@@ -390,15 +400,26 @@ def _reading_grants_shell(reading: str) -> bool:
     return _argument_names_shell(reading)
 
 
+def _stuck_on_shell(name: str) -> bool:
+    """True when a glob or punctuation mark is glued onto a leading shell word."""
+    matched = _SHELL_WORDS.match(name)
+    if matched is None or matched.start("word") != 0:
+        return False
+    return matched.group("tail") in _STUCK_MARKS
+
+
 def _argument_names_shell(reading: str) -> bool:
     """True when a tool name inside a rule's parentheses is shell-class.
 
     Separators are commas, parentheses, whitespace, ``;`` and ``|``. A ``.exe``
-    spelling, a hyphen-suffix spelling, and a colon-suffix spelling
-    (``bash:*``, ``bash:ls``) count as tool names.
+    spelling, a hyphen-suffix spelling, a colon-suffix spelling
+    (``bash:*``, ``bash:ls``), and a glob or punctuation mark glued onto a
+    shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``) count as tool names.
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
         name = piece.strip()
+        if _stuck_on_shell(name):
+            return True
         if _ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name):
             return True
     return False

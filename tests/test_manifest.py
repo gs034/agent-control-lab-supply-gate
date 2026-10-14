@@ -619,6 +619,42 @@ def test_shell_rule_in_a_bare_parenthesis_group_is_denied() -> None:
 @pytest.mark.parametrize(
     "value",
     [
+        "Read(a, Bash*)",
+        "Read(a, Bash?)",
+        "Read(a, Bash/*)",
+        "Read(a, Bash=*)",
+        "Bash?",
+        "Bash/*",
+        "Bash=*",
+    ],
+)
+def test_glob_or_punctuation_stuck_on_a_tool_word_is_denied(value: str) -> None:
+    """Same deny as a top-level ``Bash*``: the mark is glued onto the shell word."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(notes/bash/*)",
+        "Edit(scripts/**/*.sh)",
+        "Read(*.sh)",
+        "Read(*)",
+        "Grep(?)",
+        "Read(a*b)",
+        "Write(cmd.txt)",
+        "WebFetch(domain:sh.example)",
+        "Read(a, domain:sh.example)",
+    ],
+)
+def test_paths_and_domain_rules_inside_arguments_still_allow(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
         "Read(*)",
         "Edit(scripts/**/*.sh)",
         "Grep(?)",
