@@ -40,12 +40,21 @@ _KEY_ALIASES = {
 # shells here; a host that treats them as shell-equivalent needs its own rule.
 # Whole-word matching also denies a namespace segment that is a shell word
 # (mcp__ash__x, a.sh); that is the fail-closed side of the trade.
+# Launch wrappers (env, sudo, doas, xargs, nohup, pkexec, runuser, setsid,
+# chroot, unshare, nsenter) and shells nu, xonsh, and elvish are in this same
+# list. A permission rule that names one is a shell grant.
 _SHELL_WORDS = re.compile(
     r"(?:^|[^a-z])(?:"
     r"bash|sh|shell|exec|execute|cmd|powershell|pwsh|zsh|terminal|run_command|run-command"
     r"|ash|dash|fish|ksh|csh|tcsh|busybox"
+    r"|env|sudo|doas|xargs|nohup|nu|xonsh|elvish"
+    r"|pkexec|runuser|setsid|chroot|unshare|nsenter"
     r")(?:[^a-z]|$)"
 )
+# eval and su are shell grants too, but "_" and "-" stay inside the name.
+# eval_runner, run_eval, mcp__lab__eval, and su-docs are not grants. A path
+# or extension still splits them, so /bin/su and su.exe are grants.
+_EVAL_SU_WORDS = re.compile(r"(?:^|[^a-z_-])(?:eval|su)(?:[^a-z_-]|$)")
 # A bare wildcard head grants everything. A glob character anywhere in a head
 # (``Ba*``, ``B?sh``, ``*ash``) may match a shell-class tool on the host that
 # expands it, so it is treated as a possible shell grant and denied.
@@ -367,7 +376,12 @@ def _reading_grants_shell(reading: str) -> bool:
         head = rule.split("(", 1)[0].strip()
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
-        if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
+        if (
+            head in _WILDCARDS
+            or _GLOB_CHARACTERS & set(head)
+            or _SHELL_WORDS.search(head)
+            or _EVAL_SU_WORDS.search(head)
+        ):
             return True
     return False
 

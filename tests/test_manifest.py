@@ -518,10 +518,48 @@ def test_glob_inside_the_argument_is_not_a_head_glob(value: str) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["fish", "fish(*)", "ksh(*)", "dash", "csh", "tcsh", "ash", "pwsh(*)", "busybox", "Tool:dash", "mcp__fish__run"],
+    [
+        "fish",
+        "fish(*)",
+        "ksh(*)",
+        "dash",
+        "csh",
+        "tcsh",
+        "ash",
+        "pwsh(*)",
+        "busybox",
+        "Tool:dash",
+        "mcp__fish__run",
+        "env",
+        "sudo",
+        "doas",
+        "xargs",
+        "nohup",
+        "nu",
+        "xonsh",
+        "elvish",
+        "pkexec",
+        "su",
+        "runuser",
+        "setsid",
+        "chroot",
+        "unshare",
+        "nsenter",
+        "eval",
+    ],
 )
 def test_shell_aliases_are_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["eval", "su", "/bin/su", "su.exe", "Bash(eval ...)"])
+def test_eval_and_su_grants_stay_denied(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["eval_runner", "run_eval", "mcp__lab__eval", "su-docs"])
+def test_underscore_or_hyphen_does_not_make_eval_or_su_a_shell_grant(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
 
 
 @pytest.mark.parametrize("value", ["Bash2", "pwsh7(*)", "sh3", "run-command", "shell_v2"])
@@ -529,7 +567,33 @@ def test_versioned_shell_names_are_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
-@pytest.mark.parametrize("value", ["hash", "dashboard", "fishing", "cashier", "ashes", "trash", "Publish"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "hash",
+        "dashboard",
+        "fishing",
+        "cashier",
+        "ashes",
+        "trash",
+        "Publish",
+        "environment",
+        "nushell-docs",
+        "sudoers",
+        "elvishness",
+        "sugar",
+        "super",
+        "issue",
+        "result",
+        "evaluate",
+        "pkexecutable",
+        "runusers",
+        "setsides",
+        "chroots",
+        "unshared",
+        "nsentered",
+    ],
+)
 def test_words_containing_a_shell_alias_are_not_shell_class(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
 
