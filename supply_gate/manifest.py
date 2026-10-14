@@ -12,6 +12,7 @@ permissions object or string, and a lifecycle-event hook map.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -81,6 +82,15 @@ class PinnedSource:
     # A remote MCP server (http / sse / streamable-http) is fetched live on
     # every connection, so no digest of it can be pinned.
     remote: bool = False
+    # What actually launches, as the adapter must key its observation: the
+    # source for a plain source entry, otherwise a canonical record of the
+    # command, args, env and cwd (or the url / prompt). An author-chosen
+    # ``source`` label alone never selects the observation for a command.
+    launch: str = ""
+
+    @property
+    def launch_key(self) -> str:
+        return self.launch or self.source
 
     @property
     def pinned(self) -> bool:
@@ -123,12 +133,13 @@ class SupplyManifest:
         reasons: list[DenyReason] = []
         if self.mcp_servers and (
             any(server.remote for server in self.mcp_servers)
+            or _duplicate_keys(self.mcp_servers)
             or not _observed_matches_pins(self.mcp_servers, observed_mcp_servers)
         ):
             reasons.append(DenyReason.MCP_SERVER_UNPINNED)
         if self.shell_preapproved:
             reasons.append(DenyReason.SKILL_SHELL_PREAPPROVED)
-        if self.hooks and not _observed_matches_pins(self.hooks, observed_hooks):
+        if self.hooks and (_duplicate_keys(self.hooks) or not _observed_matches_pins(self.hooks, observed_hooks)):
             reasons.append(DenyReason.HOOK_UPDATE_UNVERIFIED)
         return tuple(reasons)
 
@@ -188,7 +199,16 @@ def _mcp_entry(entry: Any) -> PinnedSource:
     if source is None:
         raise ManifestError("mcp_servers entry needs a source")
     remote = transport in _MCP_REMOTE_TYPES or (url is not None and command is None)
-    return PinnedSource(source=source, pin=_pin_value(entry), remote=remote)
+    launch = ""
+    if command is not None:
+        launch = _launch_record(
+            "command",
+            command=command,
+            args=list(entry.get("args") or []),
+            env=dict(entry.get("env") or {}),
+            cwd=entry.get("cwd"),
+        )
+    return PinnedSource(source=source, pin=_pin_value(entry), remote=remote, launch=launch)
 
 
 def _hooks(values: list[Any]) -> tuple[PinnedSource, ...]:
@@ -275,7 +295,9 @@ def _hook_command(entry: Mapping[str, Any]) -> PinnedSource:
         source = command or url or prompt
     if source is None:
         raise ManifestError("hooks entry needs a source")
-    return PinnedSource(source=source, pin=_pin_value(entry))
+    # A hook runs its command, url or prompt; that string is the observation key.
+    launch = command or url or prompt or ""
+    return PinnedSource(source=source, pin=_pin_value(entry), launch=launch)
 
 
 def _shell_preapproved(values: list[Any]) -> bool:
@@ -393,14 +415,36 @@ def _split_rules(text: str) -> list[str]:
     return rules
 
 
+def _launch_record(kind: str, **fields: Any) -> str:
+    """Canonical text naming what launches; the key an adapter reports its digest under."""
+    return json.dumps({"kind": kind, **fields}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def mcp_observation_key(entry: Mapping[str, Any]) -> str:
+    """The key an adapter must report a local MCP server's digest under.
+
+    For a server with a ``command`` it is a canonical record of command, args,
+    env and cwd, so the digest is bound to what launches and not to an
+    author-chosen ``source`` label. A plain ``source`` entry keys by source.
+    """
+    return _mcp_entry(entry).launch_key
+
+
+def _duplicate_keys(entries: tuple[PinnedSource, ...]) -> bool:
+    """Two entries sharing a source label or a launch record cannot each be checked by one observation."""
+    sources = [entry.source for entry in entries]
+    launches = [entry.launch_key for entry in entries]
+    return len(set(sources)) != len(sources) or len(set(launches)) != len(launches)
+
+
 def _observed_matches_pins(entries: tuple[PinnedSource, ...], observed: Any) -> bool:
-    """Every entry is pinned and the adapter observed exactly that digest for its source."""
+    """Every entry is pinned and the adapter observed exactly that digest for what it launches."""
     if not isinstance(observed, Mapping):
         return False
     for entry in entries:
         if not entry.pinned:
             return False
-        seen = observed.get(entry.source)
+        seen = observed.get(entry.launch_key)
         if not isinstance(seen, str):
             return False
         seen_n = seen.strip().lower()
