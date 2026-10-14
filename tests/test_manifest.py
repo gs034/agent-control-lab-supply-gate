@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from supply_gate.adapters import RecordingStubAdapter, gated_install_or_update
 from supply_gate.allowlist import load_allowlist
 from supply_gate.gate import evaluate
@@ -275,6 +277,33 @@ def test_real_shape_permission_object_and_string_grants() -> None:
     assert _evaluate({"allowed-tools": "Bash(git:*) Read"}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
     assert _evaluate({"allowed-tools": "Read, Grep"}).verdict is Verdict.ALLOW
     assert _evaluate({"permissions": "Read Grep"}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"allowed-tools": "Read(src/**) Bash(*)"},
+        {"allowed-tools": "Edit(*) Bash"},
+        {"allowed-tools": "Grep(*) *"},
+        {"allowed-tools": "Read(*),Bash"},
+        {"allowedTools": "Read(a b) Shell(x)"},
+        {"permissions": {"allow": "Read(*) Bash"}},
+        {"permissions": "Edit(*) all"},
+        {"allowed_tools": ["Read(*) Bash(*)"]},
+    ],
+)
+def test_shell_rule_after_a_parenthesised_rule_is_denied(manifest: dict) -> None:
+    assert _evaluate(manifest).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+def test_parenthesised_benign_rules_still_allow() -> None:
+    assert _evaluate({"allowed-tools": "Read(*.sh) Grep"}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": "Read(bash notes/**), Grep(*)"}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize("value", ["Read(src/** Bash", "Read) Bash", "Read((x) Bash"])
+def test_unbalanced_permission_string_is_invalid(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.ENVELOPE_INVALID,)
 
 
 def test_real_shape_hook_map_needs_pin_and_observed_digest() -> None:
