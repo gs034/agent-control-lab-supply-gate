@@ -60,13 +60,14 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # The argument is cut on commas, parentheses, whitespace, ``;`` and ``|``.
 # Whitespace is included because the top-level rule split cuts on whitespace,
 # and a host that ignores parentheses would apply that cut inside the argument.
-# A piece that is a bare tool name, a ``.exe`` variant, or a hyphen-suffix
-# variant (``bash.exe``, ``bash-x``) is judged with the same shell-word match
-# as a head. Glob characters and ``/`` stay argument syntax
+# A piece that is a bare tool name, a ``.exe`` variant, a hyphen-suffix
+# variant, or a colon-suffix variant (``bash.exe``, ``bash-x``, ``bash:*``,
+# ``bash:ls``) is judged with the same shell-word match as a head. A glob
+# outside a colon suffix, and ``/``, stay argument syntax
 # (``Read(*)``, ``Edit(scripts/**/*.sh)``), as does a dotted name that is not
 # a ``.exe`` variant (``Write(cmd.txt)``).
 _ARGUMENT_SPLIT = re.compile(r"[,();|\s]+")
-_ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+)*")
+_ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
@@ -393,7 +394,8 @@ def _argument_names_shell(reading: str) -> bool:
     """True when a tool name inside a rule's parentheses is shell-class.
 
     Separators are commas, parentheses, whitespace, ``;`` and ``|``. A ``.exe``
-    spelling and a hyphen-suffix spelling count as tool names.
+    spelling, a hyphen-suffix spelling, and a colon-suffix spelling
+    (``bash:*``, ``bash:ls``) count as tool names.
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
         name = piece.strip()

@@ -600,6 +600,8 @@ def test_hook_observation_under_the_source_label_does_not_cover_the_command() ->
         "Read(a|Bash)",
         "Read(a, bash.exe)",
         "Read(a, Bash-x)",
+        "Read(a, Bash:*)",
+        "Read(a, Bash:ls)",
         "Read(bash notes/**)",
         "Skill(exec-plan)",
     ],
