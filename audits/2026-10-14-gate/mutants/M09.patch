@@ -1,0 +1,13 @@
+Intent: an entry without a full-digest pin is skipped during observed-digest matching instead of failing it, so an unpinned hook (or MCP server) is accepted.
+Property: every declared hook and MCP server must carry a full-digest pin equal to the adapter-observed digest; an unpinned entry is DENY (hook_update_unverified / mcp_server_unpinned).
+--- a/supply_gate/manifest.py
++++ b/supply_gate/manifest.py
+@@ -399,7 +399,7 @@ def _observed_matches_pins(entries: tuple[PinnedSource, ...], observed: Any) ->
+         return False
+     for entry in entries:
+         if not entry.pinned:
+-            return False
++            continue
+         seen = observed.get(entry.source)
+         if not isinstance(seen, str):
+             return False

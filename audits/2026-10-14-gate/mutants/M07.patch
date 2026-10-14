@@ -1,0 +1,13 @@
+Intent: a remote (never-pinnable) MCP server triggers MCP_SERVER_UNPINNED only when every declared server is remote, so one remote server is masked by pinned local ones.
+Property: a single remote MCP server (http / sse / streamable-http) in the manifest is DENY (mcp_server_unpinned) regardless of how the other servers are pinned and observed.
+--- a/supply_gate/manifest.py
++++ b/supply_gate/manifest.py
+@@ -122,7 +122,7 @@ class SupplyManifest:
+         """
+         reasons: list[DenyReason] = []
+         if self.mcp_servers and (
+-            any(server.remote for server in self.mcp_servers)
++            all(server.remote for server in self.mcp_servers)
+             or not _observed_matches_pins(self.mcp_servers, observed_mcp_servers)
+         ):
+             reasons.append(DenyReason.MCP_SERVER_UNPINNED)

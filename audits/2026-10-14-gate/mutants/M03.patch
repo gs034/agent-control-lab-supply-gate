@@ -1,0 +1,13 @@
+Intent: when the envelope carries a ref, the observed HEAD is no longer compared to the pinned digest (trust the ref).
+Property: the post-checkout HEAD must exactly equal expected_sha; a mutable ref is never a substitute for the pin and a mismatch is DENY (head_mismatch).
+--- a/supply_gate/gate.py
++++ b/supply_gate/gate.py
+@@ -95,7 +95,7 @@ def evaluate(
+ 
+     if not verify_performed:
+         reasons.append(DenyReason.VERIFY_MISSING)
+-    elif parsed is not None and observed != parsed.expected_sha:
++    elif parsed is not None and parsed.ref is None and observed != parsed.expected_sha:
+         reasons.append(DenyReason.HEAD_MISMATCH)
+ 
+     if parsed is not None and parsed.manifest is not None:

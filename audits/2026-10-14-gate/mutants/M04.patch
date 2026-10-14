@@ -1,0 +1,13 @@
+Intent: the presence of untrusted prose counts as a performed verify, so no observed HEAD plus prose drops verify_missing and records verify_performed=true.
+Property: verify_performed and verify_missing derive only from an observed full-digest HEAD; marketplace or agent prose is data and cannot stand in for verification.
+--- a/supply_gate/gate.py
++++ b/supply_gate/gate.py
+@@ -65,7 +65,7 @@ def evaluate(
+     kill = _kill_active(kill_active)
+     prose_present = bool(untrusted_prose and untrusted_prose.strip())
+     observed = _normalize_head(observed_head)
+-    verify_performed = observed is not None
++    verify_performed = observed is not None or prose_present
+ 
+     reasons: list[DenyReason] = []
+     if parsed is None:

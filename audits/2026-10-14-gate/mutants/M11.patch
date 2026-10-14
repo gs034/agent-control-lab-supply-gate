@@ -1,0 +1,13 @@
+Intent: a weak or unknown update mode is silently normalised to pin_and_verify with weak_attempt=False instead of being reported.
+Property: a weak update mode (trust_ref, auto_latest, skip_verify, ...) must be returned as a weak attempt and DENY (update_policy_rejected); it is never honoured as pin_and_verify.
+--- a/supply_gate/update_policy.py
++++ b/supply_gate/update_policy.py
+@@ -112,7 +112,7 @@ def parse_update_policy(
+         return None, True
+     normalised = mode.strip()
+     if normalised in _WEAK_MODES or normalised != PIN_AND_VERIFY:
+-        return UpdatePolicy(mode=normalised, source=source), True
++        return UpdatePolicy(mode=PIN_AND_VERIFY, source=source), False
+     return UpdatePolicy(mode=PIN_AND_VERIFY, source=source), weak
+ 
+ 
