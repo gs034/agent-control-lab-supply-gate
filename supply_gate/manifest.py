@@ -286,9 +286,46 @@ def _tokens_grant_shell(tokens: list[str]) -> bool:
 
 
 def _is_shell_grant(item: str) -> bool:
-    norm = unicodedata.normalize("NFKC", item).translate(_ZERO_WIDTH).strip().lower()
-    head = norm.split("(", 1)[0].strip()
-    return head in _WILDCARDS or bool(_SHELL_WORDS.search(head))
+    """True when any rule in ``item`` grants a shell-class tool or a bare wildcard.
+
+    A string may carry several rules (``Read(src/**) Bash(*)``). Each rule is
+    judged on its own head, so a benign parenthesised rule cannot hide the next.
+    """
+    norm = unicodedata.normalize("NFKC", item).translate(_ZERO_WIDTH).lower()
+    for rule in _split_rules(norm):
+        head = rule.split("(", 1)[0].strip()
+        if head in _WILDCARDS or _SHELL_WORDS.search(head):
+            return True
+    return False
+
+
+def _split_rules(text: str) -> list[str]:
+    """Split a permission string into ``Tool`` / ``Tool(pattern)`` rules.
+
+    Whitespace and commas separate rules outside parentheses. Unbalanced
+    parentheses are ill-formed: the gate cannot tell where a rule ends.
+    """
+    rules: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                raise ManifestError("permissions rule has an unbalanced ')'")
+            depth -= 1
+        elif depth == 0 and (char == "," or char.isspace()):
+            if current:
+                rules.append("".join(current))
+                current = []
+            continue
+        current.append(char)
+    if depth != 0:
+        raise ManifestError("permissions rule has an unbalanced '('")
+    if current:
+        rules.append("".join(current))
+    return rules
 
 
 def _hooks_verified(hooks: tuple[PinnedSource, ...], observed: Any) -> bool:
