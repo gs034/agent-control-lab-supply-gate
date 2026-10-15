@@ -903,3 +903,48 @@ def test_s7_url_and_command_without_a_type_is_invalid() -> None:
         typed = {**server, "type": transport}
         observed = {"https://evil.example/mcp": SERVER_PIN, mcp_observation_key(typed): SERVER_PIN}
         assert _gated({"mcp_servers": [typed]}, observed).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "mcp__desktop-commander",
+        "mcp__desktop-commander(*)",
+        "mcp__Desktop-Commander",
+        "mcp__github",
+        "mcp__srv__",
+        "mcp__",
+        "mcp____run",
+        "Read(src/**) mcp__desktop-commander",
+        "Read(a, mcp__desktop-commander)",
+        "mcp__desktop_commander",
+    ],
+)
+def test_s8_mcp_server_wide_grant_is_a_shell_preapproval(value: str) -> None:
+    """S-8 PoC: ``mcp__<server>`` with no tool segment pre-approves every tool on that server."""
+    for manifest in ({"permissions": {"allow": [value]}}, {"allowed-tools": value}, {"permissions": [value]}):
+        assert _evaluate(manifest).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    decision = _gated({"permissions": {"allow": [value]}})
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "mcp__github__pushFiles",
+        "mcp__desktop-commander__read_file",
+        "mcp__srv__list_tools",
+        "mcp__x__Dashboard",
+        "Read(notes/mcp__x)",
+        "mcpserver",
+        "mcp",
+    ],
+)
+def test_s8_tool_scoped_mcp_names_are_judged_as_before(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+def test_s8_server_wide_name_in_deny_or_ask_is_not_a_grant() -> None:
+    manifest = {"permissions": {"deny": ["mcp__desktop-commander"], "ask": ["mcp__github"]}}
+    assert _evaluate(manifest).verdict is Verdict.ALLOW

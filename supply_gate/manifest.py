@@ -427,7 +427,25 @@ def _reading_grants_shell(reading: str) -> bool:
             raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
             return True
+        if _mcp_server_wide(head):
+            return True
     return _argument_names_shell(reading)
+
+
+def _mcp_server_wide(name: str) -> bool:
+    """True when ``name`` is ``mcp__<server>`` with no ``__<tool>`` segment.
+
+    A host reads such a rule as every tool on that server, so it pre-approves
+    whatever shell-class tool the server exposes. An empty server or tool
+    segment (``mcp__``, ``mcp__srv__``, ``mcp____run``) is read the same way.
+    ``mcp__srv__tool`` names one tool and is judged by its words as before.
+    The camelCase reading only inserts ``_`` between two letters or digits, so
+    it never adds or removes a ``__`` separator.
+    """
+    parts = name.split("__")
+    if parts[0] != "mcp" or len(parts) < 2:
+        return False
+    return len(parts) == 2 or not all(parts[1:])
 
 
 def _stuck_on_shell(name: str) -> bool:
@@ -448,7 +466,7 @@ def _argument_names_shell(reading: str) -> bool:
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
         name = piece.strip()
-        if _stuck_on_shell(name):
+        if _stuck_on_shell(name) or _mcp_server_wide(name):
             return True
         if _ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name):
             return True
