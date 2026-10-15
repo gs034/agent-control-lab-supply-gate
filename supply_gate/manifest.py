@@ -84,7 +84,9 @@ _CASE_BOUNDARY = re.compile(
     r"|(?<=[0-9])(?=[A-Za-z])"
 )
 _ARGUMENT_SPLIT = re.compile(r"[,();|\s]+")
-_ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
+# An argument piece longer than this is not read as a tool name. It is judged
+# by the shell-word match alone, so any shell word inside it denies.
+_MAX_ARGUMENT_PIECE = 256
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
@@ -468,9 +470,78 @@ def _argument_names_shell(reading: str) -> bool:
         name = piece.strip()
         if _stuck_on_shell(name) or _mcp_server_wide(name):
             return True
-        if _ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name):
+        if len(name) > _MAX_ARGUMENT_PIECE:
+            if _SHELL_WORDS.search(name):
+                return True
+            continue
+        if _is_argument_tool_name(name) and _SHELL_WORDS.search(name):
             return True
     return False
+
+
+# Character classes for the argument tool-name scanner below.
+_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_@")
+_COLON_GLOBS = frozenset("*?")
+# One pass, one state per character. The accepted language is the one the
+# earlier pattern ``[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*``
+# described: a name run (letters, digits, ``_``, ``@``, ``:``), then any mix of
+# a ``.exe`` suffix, a ``-`` name run, or a ``:`` suffix that may carry ``*`` or
+# ``?``. That pattern let ``:`` belong to the name run or start a suffix, which
+# backtracked exponentially on a near miss such as ``a-a:a-a:...!``. Here the
+# two readings are tracked as one state, so the cost is linear in the length.
+#   name      in a name run
+#   name_or   in a name run, and the last ``:`` may also have started a suffix
+#   name_suffix  in a name run that may also be a ``:`` suffix
+#   colon     just after a ``:`` that can only start a suffix
+#   suffix    in a ``:`` suffix
+#   hyphen    just after ``-``
+#   dot1..3   inside ``.exe``; exe after it
+_SCAN_ACCEPT = frozenset({"name", "name_or", "name_suffix", "suffix", "exe"})
+
+
+def _scan_step(state: str, char: str) -> str | None:
+    is_name = char in _NAME_CHARS
+    if state in {"start", "hyphen"}:
+        return "name" if is_name or char == ":" else None
+    if state == "colon":
+        return "suffix" if is_name or char in _COLON_GLOBS else None
+    if state == "dot1":
+        return "dot2" if char == "e" else None
+    if state == "dot2":
+        return "dot3" if char == "x" else None
+    if state == "dot3":
+        return "exe" if char == "e" else None
+    # name, name_or, name_suffix, suffix and exe all end an item here.
+    if char == "-":
+        return "hyphen"
+    if char == ".":
+        return "dot1"
+    if state == "exe":
+        return "colon" if char == ":" else None
+    if state == "name":
+        if is_name:
+            return "name"
+        return "name_or" if char == ":" else None
+    if state in {"name_or", "name_suffix"}:
+        if is_name:
+            return "name_suffix"
+        if char == ":":
+            return "name_or"
+        return "suffix" if char in _COLON_GLOBS else None
+    # suffix
+    if is_name or char in _COLON_GLOBS:
+        return "suffix"
+    return "colon" if char == ":" else None
+
+
+def _is_argument_tool_name(name: str) -> bool:
+    """True when ``name`` is a bare tool name or a ``.exe``, ``-`` or ``:`` suffix spelling of one."""
+    state: str | None = "start"
+    for char in name:
+        state = _scan_step(state, char)
+        if state is None:
+            return False
+    return state in _SCAN_ACCEPT
 
 
 def _split_case(text: str) -> str:

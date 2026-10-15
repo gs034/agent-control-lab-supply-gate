@@ -948,3 +948,61 @@ def test_s8_tool_scoped_mcp_names_are_judged_as_before(value: str) -> None:
 def test_s8_server_wide_name_in_deny_or_ask_is_not_a_grant() -> None:
     manifest = {"permissions": {"deny": ["mcp__desktop-commander"], "ask": ["mcp__github"]}}
     assert _evaluate(manifest).verdict is Verdict.ALLOW
+
+
+S9_ADVERSARIAL = [
+    "Read(" + "a-a:" * 40 + "!)",
+    "Read(" + "a-a:" * 2000 + "!)",
+    "Read(" + "a:" * 5000 + "!)",
+    "Read(" + "a-" * 5000 + "a!)",
+    "Read(" + "a:*" * 5000 + "-)",
+    "Read(" + "a.ex" * 5000 + "!)",
+    "Read(" + "aB" * 5000 + "!)",
+    "Read(" + "x" * 20_000 + ")",
+    "Read(a) " * 1000,
+    "a-a:" * 40 + "!",
+]
+
+
+@pytest.mark.parametrize("value", S9_ADVERSARIAL, ids=range(len(S9_ADVERSARIAL)))
+def test_s9_adversarial_argument_text_evaluates_quickly(value: str) -> None:
+    """S-9 PoC: ``Read(`` + ``a-a:`` * 20 + ``!)`` took about 1 s and doubled per repeat."""
+    import time
+
+    for manifest in ({"allowed-tools": value}, {"permissions": {"allow": [value]}}):
+        start = time.perf_counter()
+        decision = _evaluate(manifest)
+        elapsed = time.perf_counter() - start
+        assert decision.verdict is not None
+        assert elapsed < 0.5, f"{elapsed:.3f}s"
+
+
+def test_s9_overlap_case_keeps_its_verdict() -> None:
+    assert _evaluate({"allowed-tools": "Read(" + "a-a:" * 40 + "!)"}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": "Read(" + "a-a:" * 40 + "bash)"}).reasons == (
+        DenyReason.SKILL_SHELL_PREAPPROVED,
+    )
+
+
+def test_s9_long_argument_piece_is_judged_by_shell_words_alone() -> None:
+    """A piece past the length cap is not read as a tool name; any shell word inside it denies."""
+    long_shell = "Read(" + "a" * 300 + "/bash/x)"
+    assert _evaluate({"allowed-tools": long_shell}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    short_path = "Read(" + "a" * 30 + "/bash/x)"
+    assert _evaluate({"allowed-tools": short_path}).verdict is Verdict.ALLOW
+    long_benign = "Read(" + "a" * 300 + "/notes/x)"
+    assert _evaluate({"allowed-tools": long_benign}).verdict is Verdict.ALLOW
+
+
+def test_s9_tool_name_scanner_matches_the_previous_pattern() -> None:
+    """Every string up to length 5 over the pattern's alphabet is accepted exactly as before."""
+    import itertools
+    import re
+
+    from supply_gate.manifest import _is_argument_tool_name
+
+    previous = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
+    for length in range(6):
+        for chars in itertools.product("a:-*?.ex!", repeat=length):
+            text = "".join(chars)
+            assert _is_argument_tool_name(text) is bool(previous.fullmatch(text)), repr(text)
