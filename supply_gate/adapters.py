@@ -7,12 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
-from supply_gate.allowlist import AllowlistConfig, AllowlistError, load_allowlist
-from supply_gate.gate import Decision, evaluate, safe_evaluate
+from supply_gate.allowlist import AllowlistConfig, load_allowlist
+from supply_gate.gate import Decision, safe_evaluate
 from supply_gate.reasons import DenyReason
 from supply_gate.update_policy import (
     UpdatePolicy,
-    UpdatePolicyError,
     evaluate_update_policy,
     infer_operation,
     load_update_policy,
@@ -152,61 +151,119 @@ def gated_install_or_update(
     fixture runs stay independent of ambient host config. Pass fixture
     files or explicit objects instead. When ``use_env`` is False and
     ``kill_active`` is omitted, kill is off.
+
+    This function never raises. A malformed or unreadable allowlist is
+    ``allowlist_invalid``, a malformed update policy (file, mapping or
+    object) is ``update_policy_rejected``, and an envelope that is not an
+    object is ``envelope_invalid``; each comes back as a DENY decision with a
+    receipt. An adapter fault or any other unexpected fault is the
+    ``safe_evaluate`` DENY (``kill_active``).
     """
     extra: list[DenyReason] = []
-    weak_attempt = False
-    policy = update_policy
-    if policy is None:
-        try:
+    kill = False if kill_active is None and not use_env else kill_active
+
+    # Boundary rule: nothing below raises to the caller. Broken host config
+    # and a non-object envelope become DENY with their own reason codes; any
+    # other fault becomes the safe_evaluate DENY (kill_active).
+    policy_reasons = _update_policy_reasons(
+        update_policy,
+        update_policy_raw=update_policy_raw,
+        update_policy_path=update_policy_path,
+        use_env=use_env,
+    )
+    extra.extend(policy_reasons)
+    origins, allowlist_ok = _allowlist_origins(allowlist, allowlist_path=allowlist_path, use_env=use_env)
+    if not allowlist_ok:
+        extra.append(DenyReason.ALLOWLIST_INVALID)
+
+    if not isinstance(envelope, Mapping):
+        # Not an object: there is nothing to materialise. evaluate() records
+        # envelope_invalid (and verify_missing, since no HEAD was observed).
+        return safe_evaluate(
+            envelope,
+            None,
+            allowed_origins=origins,
+            kill_active=kill,
+            untrusted_prose=untrusted_prose,
+            extra_reasons=tuple(extra),
+        )
+
+    try:
+        capability = _mapping_str(envelope, "capability") or ""
+        operation = infer_operation(envelope, capability)
+        request = MaterialiseRequest(
+            origin=_mapping_str(envelope, "origin") or "",
+            expected_sha=_mapping_str(envelope, "expected_sha") or "",
+            capability=capability,
+            operation=operation,
+            ref=_mapping_str(envelope, "ref"),
+        )
+        result = adapter.materialise(request)
+        observed_head = result.observed_head
+        observed_hooks = result.observed_hooks
+        observed_mcp_servers = result.observed_mcp_servers
+    except Exception:  # noqa: BLE001 - adapter boundary: a fault is DENY, never raised
+        return safe_evaluate(envelope, None, kill_active=True)
+
+    return safe_evaluate(
+        envelope,
+        observed_head,
+        allowed_origins=origins,
+        kill_active=kill,
+        untrusted_prose=untrusted_prose,
+        extra_reasons=tuple(extra),
+        observed_hooks=observed_hooks,
+        observed_mcp_servers=observed_mcp_servers,
+    )
+
+
+def _update_policy_reasons(
+    update_policy: UpdatePolicy | None,
+    *,
+    update_policy_raw: Mapping[str, Any] | None,
+    update_policy_path: str | Path | None,
+    use_env: bool,
+) -> tuple[DenyReason, ...]:
+    """Load and judge the update policy; any load fault is ``update_policy_rejected``."""
+    try:
+        if update_policy is not None:
+            if not isinstance(update_policy, UpdatePolicy):
+                return (DenyReason.UPDATE_POLICY_REJECTED,)
+            policy, weak_attempt = update_policy, False
+        else:
+            if update_policy_raw is not None and not isinstance(update_policy_raw, Mapping):
+                return (DenyReason.UPDATE_POLICY_REJECTED,)
             policy, weak_attempt = load_update_policy(
                 path=update_policy_path,
                 raw=update_policy_raw,
                 use_env=use_env,
                 fallback_default=True,
             )
-        except UpdatePolicyError:
-            extra.append(DenyReason.UPDATE_POLICY_REJECTED)
-            policy = None
-            weak_attempt = True
-    extra.extend(
-        evaluate_update_policy(policy, weak_attempt=weak_attempt, required=True)
-    )
+        return evaluate_update_policy(policy, weak_attempt=weak_attempt, required=True)
+    except Exception:  # noqa: BLE001 - malformed host policy is DENY, never raised
+        return (DenyReason.UPDATE_POLICY_REJECTED,)
 
-    capability = _mapping_str(envelope, "capability") or ""
-    operation = infer_operation(envelope, capability)
-    request = MaterialiseRequest(
-        origin=_mapping_str(envelope, "origin") or "",
-        expected_sha=_mapping_str(envelope, "expected_sha") or "",
-        capability=capability,
-        operation=operation,
-        ref=_mapping_str(envelope, "ref"),
-    )
+
+def _allowlist_origins(
+    allowlist: AllowlistConfig | None,
+    *,
+    allowlist_path: str | Path | None,
+    use_env: bool,
+) -> tuple[frozenset[str], bool]:
+    """Resolve allowlisted origins; any load fault is ``allowlist_invalid`` with no origins."""
     try:
-        result = adapter.materialise(request)
-    except Exception:
-        return safe_evaluate(envelope, None, kill_active=True)
-
-    origins: frozenset[str] | None
-    if allowlist is not None:
-        origins = allowlist.origins
-    else:
-        try:
-            origins = load_allowlist(path=allowlist_path, use_env=use_env).origins
-        except AllowlistError:
-            extra.append(DenyReason.ALLOWLIST_INVALID)
-            origins = frozenset()
-
-    kill = False if kill_active is None and not use_env else kill_active
-    return evaluate(
-        envelope,
-        result.observed_head,
-        allowed_origins=origins,
-        kill_active=kill,
-        untrusted_prose=untrusted_prose,
-        extra_reasons=tuple(extra),
-        observed_hooks=result.observed_hooks,
-        observed_mcp_servers=result.observed_mcp_servers,
-    )
+        if allowlist is not None:
+            if not isinstance(allowlist, AllowlistConfig):
+                return frozenset(), False
+            origins = allowlist.origins
+            if not isinstance(origins, (set, frozenset)) or not origins:
+                return frozenset(), False
+            if not all(isinstance(origin, str) and origin.strip() for origin in origins):
+                return frozenset(), False
+            return frozenset(origins), True
+        return load_allowlist(path=allowlist_path, use_env=use_env).origins, True
+    except Exception:  # noqa: BLE001 - malformed host allowlist is DENY, never raised
+        return frozenset(), False
 
 
 def _mapping_str(envelope: Mapping[str, Any], key: str) -> str | None:

@@ -87,13 +87,13 @@ def _origins_from_mapping(raw: Mapping[str, Any]) -> frozenset[str]:
 def _origins_from_file(path: Path) -> frozenset[str]:
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise AllowlistError(f"allowlist file unreadable: {path}") from exc
     stripped = text.lstrip()
     if stripped.startswith("{"):
         try:
             parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             raise AllowlistError("allowlist JSON is ill-formed") from exc
         if not isinstance(parsed, Mapping):
             raise AllowlistError("allowlist JSON must be an object")

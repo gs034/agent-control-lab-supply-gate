@@ -285,3 +285,128 @@ def test_gated_path_kill_env_truthy_spelling_denies(monkeypatch: pytest.MonkeyPa
         update_policy=UpdatePolicy.fail_closed_default(),
     )
     assert decision.reasons == (DenyReason.KILL_ACTIVE,)
+
+
+def _write(tmp_path: Path, name: str, data: bytes | str) -> Path:
+    path = tmp_path / name
+    if isinstance(data, bytes):
+        path.write_bytes(data)
+    else:
+        path.write_text(data, encoding="utf-8")
+    return path
+
+
+_NOT_UTF8 = b"\xff\xfe{\x00"
+_TOO_DEEP = '{"origins": ' + "[" * 100000 + "]" * 100000 + "}"
+
+
+@pytest.mark.parametrize("data", [_NOT_UTF8, _TOO_DEEP], ids=["not_utf8", "too_deep"])
+def test_malformed_allowlist_file_is_deny_not_raise(tmp_path: Path, data: bytes | str) -> None:
+    """S-6: a malformed allowlist on the adapter path is allowlist_invalid, never an exception."""
+    path = _write(tmp_path, "allowlist.json", data)
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy=UpdatePolicy.fail_closed_default(),
+        allowlist_path=path,
+        use_env=False,
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.ALLOWLIST_INVALID in decision.reasons
+
+
+@pytest.mark.parametrize("allowlist", [{"origins": [ORIGIN_OK]}, [ORIGIN_OK], "nope"])
+def test_allowlist_object_of_the_wrong_type_is_deny_not_raise(allowlist: object) -> None:
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy=UpdatePolicy.fail_closed_default(),
+        allowlist=allowlist,  # type: ignore[arg-type]
+        use_env=False,
+    )
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.ALLOWLIST_INVALID in decision.reasons
+
+
+def test_malformed_allowlist_env_is_deny_not_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACL_SUPPLY_GATE_ALLOWLIST", str(_write(tmp_path, "allowlist.json", _NOT_UTF8)))
+    monkeypatch.delenv("ACL_SUPPLY_GATE_KILL", raising=False)
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy=UpdatePolicy.fail_closed_default(),
+    )
+    assert DenyReason.ALLOWLIST_INVALID in decision.reasons
+    # evaluate() reads the same env allowlist and also returns a DENY, not an exception.
+    direct = evaluate(_ok_envelope(), PIN, kill_active=False)
+    assert direct.verdict is Verdict.DENY
+    assert DenyReason.ALLOWLIST_INVALID in direct.reasons
+
+
+@pytest.mark.parametrize("data", [_NOT_UTF8, '{"mode": ' + "[" * 100000 + "]" * 100000 + "}"], ids=["not_utf8", "too_deep"])
+def test_malformed_update_policy_file_is_deny_not_raise(tmp_path: Path, data: bytes | str) -> None:
+    """S-6: a malformed update policy file is update_policy_rejected, never an exception."""
+    path = _write(tmp_path, "policy.json", data)
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy_path=path,
+        use_env=False,
+    )
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.UPDATE_POLICY_REJECTED,)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"update_policy_raw": ["pin_and_verify"]},
+        {"update_policy_raw": "pin_and_verify"},
+        {"update_policy": {"mode": "pin_and_verify"}},
+        {"update_policy": "pin_and_verify"},
+    ],
+)
+def test_update_policy_of_the_wrong_type_is_deny_not_raise(kwargs: dict[str, object]) -> None:
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        use_env=False,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.UPDATE_POLICY_REJECTED,)
+
+
+@pytest.mark.parametrize("envelope", [None, [1, 2], "envelope", 7, b"{}"])
+def test_non_object_envelope_is_deny_not_raise(envelope: object) -> None:
+    """S-6: a non-object envelope is envelope_invalid; the adapter is not asked to materialise."""
+
+    class _Refuse:
+        def materialise(self, request: object) -> object:
+            raise AssertionError("adapter must not run for a non-object envelope")
+
+    decision = gated_install_or_update(
+        envelope,  # type: ignore[arg-type]
+        _Refuse(),  # type: ignore[arg-type]
+        update_policy=UpdatePolicy.fail_closed_default(),
+        use_env=False,
+    )
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.ENVELOPE_INVALID, DenyReason.VERIFY_MISSING)
+    assert decision.receipt["decision"] == "DENY"
+
+
+def test_adapter_returning_a_non_result_is_deny_not_raise() -> None:
+    class _Broken:
+        def materialise(self, request: object) -> object:
+            return None
+
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        _Broken(),  # type: ignore[arg-type]
+        update_policy=UpdatePolicy.fail_closed_default(),
+        use_env=False,
+    )
+    # Same outcome as an adapter that raises: the fault is DENY (kill_active), no HEAD.
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.KILL_ACTIVE, DenyReason.VERIFY_MISSING)
