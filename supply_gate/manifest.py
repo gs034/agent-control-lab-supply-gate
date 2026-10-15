@@ -46,17 +46,22 @@ _SHELL_WORDS = re.compile(
     r"|ash|dash|fish|ksh|csh|tcsh|busybox"
     r")(?P<tail>[^a-z]|$)"
 )
-# eval, su, env and sudo are denied as heads and as argument tokens only when
-# the whole token, or the whole last path segment, is that word. A ``.exe``
-# spelling of the same word counts. ``_`` and ``-`` stay inside the name, so
-# eval_runner, run_eval, mcp__lab__eval and su-docs are not grants, and neither
-# is a longer file name such as .env, env.example or sudo_helper.py.
-_EXTRA_SHELL_WORDS = frozenset({"eval", "su", "env", "sudo"})
+# eval, su, and the launch words below are denied as heads and as argument
+# tokens only when the whole token, or the whole last path segment, is that
+# word. A ``.exe``, ``.cmd`` or ``.bat`` spelling counts. ``_`` and ``-`` stay
+# inside the name, so eval_runner, run_eval, mcp__lab__eval and su-docs are
+# not grants. A longer file name (.env, eval.py, sudo_helper.py), a middle
+# path segment (src/env/config.py, docs/su/x), and a bare directory token
+# (eval/) are not that word either.
+_ARGUMENT_LAUNCH_WORDS = frozenset({"env", "sudo", "doas", "xargs", "nohup"})
+_EXTRA_SHELL_WORDS = frozenset({"eval", "su"}) | _ARGUMENT_LAUNCH_WORDS
+_LAUNCHER_SUFFIXES = (".exe", ".cmd", ".bat")
 # A glob or one of these marks glued straight onto a shell word (``bash*``,
 # ``bash?``, ``bash/*``, ``bash=*``, ``bash^``, ``bash~``, ``bash%``,
 # ``bash+x``). A dot stays out of this set so a file name such as ``cmd.txt``
 # is not a tool spelling; a shell word that is only a trailing dot (``bash.``)
-# is handled beside this set, as is a leading hyphen (``-bash``).
+# is handled beside this set, as is a leading hyphen (``-bash``, ``-su``,
+# ``--eval``).
 _STUCK_MARKS = frozenset({"*", "?", "/", "=", "^", "~", "%", "+"})
 # A bare wildcard head grants everything. A glob character anywhere in a head
 # (``Ba*``, ``B?sh``, ``*ash``) may match a shell-class tool on the host that
@@ -74,22 +79,27 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # and backslash. Whitespace is included because the top-level rule split
 # cuts on whitespace, and a host that ignores parentheses would apply that
 # cut inside the argument.
-# A piece that is a bare tool name, a ``.exe`` variant, a hyphen-suffix
-# variant, or a colon-suffix variant (``bash.exe``, ``bash-x``, ``bash:*``,
-# ``bash:ls``) is judged with the same shell-word match as a head. ``eval``,
-# ``su``, ``env`` and ``sudo`` match only as a whole token or as the whole
-# last path segment, as heads and inside arguments. A glob or punctuation
-# mark glued straight onto a shell word (``bash*``, ``bash?``, ``bash/*``,
-# ``bash=*``, ``bash^``, ``bash~``, ``bash%``, ``bash+x``, ``bash.``,
-# ``-bash``) is judged the same way a rule head ``bash*`` is. A token that
-# contains ``/`` is judged on its last path segment, after a trailing slash
-# is dropped (``/bin/sh``, ``./sh``, ``/bin/sh/``). A normal path whose last
-# segment is not a shell word, and a ``domain:`` rule, stay argument syntax
+# A piece that is a bare tool name, a ``.exe`` / ``.cmd`` / ``.bat`` variant,
+# a hyphen-suffix variant, or a colon-suffix variant (``bash.exe``,
+# ``bash.cmd``, ``sh.bat``, ``bash-x``, ``bash:*``, ``bash:ls``) is judged
+# with the same shell-word match as a head. ``eval``, ``su``, ``env``,
+# ``sudo``, ``doas``, ``xargs`` and ``nohup`` match only as a whole token or
+# as the whole last path segment, as heads and inside arguments. A glob or
+# punctuation mark glued straight onto a shell word (``bash*``, ``bash?``,
+# ``bash/*``, ``bash=*``, ``bash^``, ``bash~``, ``bash%``, ``bash+x``,
+# ``bash.``, ``-bash``, ``-su``, ``--eval``) is judged the same way a rule
+# head ``bash*`` is. A token that contains ``/`` is judged on its last path
+# segment, after a trailing slash is dropped (``/bin/sh``, ``./sh``,
+# ``/bin/sh/``). A bare directory token whose only segment is an extra word
+# (``eval/``) is not that word. A normal path whose last segment is not a
+# shell word, and a ``domain:`` rule, stay argument syntax
 # (``notes/bash/*``, ``scripts/**/*.sh``, ``domain:sh.example``, ``.env``,
-# ``docs/env/setup.md``), as does a dotted name that is not a ``.exe``
-# variant (``Write(cmd.txt)``).
+# ``src/env/config.py``, ``docs/su/x``, ``eval.py``), as does a dotted name
+# that is not a launcher suffix (``Write(cmd.txt)``).
 _ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\[\\]!#<\\\\\\s]+")
-_ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
+_ARGUMENT_TOOL_NAME = re.compile(
+    r"[a-z0-9_:@]+(?:\.(?:exe|cmd|bat)|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*"
+)
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
@@ -416,22 +426,33 @@ def _reading_grants_shell(reading: str) -> bool:
     return _argument_names_shell(reading)
 
 
+def _launcher_stem(name: str) -> str:
+    for suffix in _LAUNCHER_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
 def _whole_extra_shell(name: str) -> bool:
-    """True when ``name`` is exactly eval, su, env or sudo, or that word plus ``.exe``."""
-    stem = name[:-4] if name.endswith(".exe") else name
-    return stem in _EXTRA_SHELL_WORDS
+    """True when ``name`` is exactly an extra shell word, or that word plus a launcher suffix."""
+    return _launcher_stem(name) in _EXTRA_SHELL_WORDS
+
+
+def _exact_shell_word(name: str) -> bool:
+    matched = _SHELL_WORDS.fullmatch(name)
+    return matched is not None and matched.group("tail") == ""
 
 
 def _stuck_on_shell(name: str) -> bool:
     """True when a glob or punctuation mark is glued onto a leading shell word.
 
-    A leading hyphen on a whole shell word (``-bash``) counts, and so does a
-    shell word that ends in a bare dot (``bash.``). A dotted file name such
-    as ``cmd.txt`` does not.
+    Leading hyphens on a whole shell word (``-bash``, ``-su``, ``--eval``)
+    count, and so does a shell word that ends in a bare dot (``bash.``). A
+    dotted file name such as ``cmd.txt`` does not.
     """
-    if name.startswith("-") and not name.startswith("--"):
-        prefixed = _SHELL_WORDS.fullmatch(name[1:])
-        if prefixed is not None and prefixed.group("tail") == "":
+    if name.startswith("-"):
+        rest = name.lstrip("-")
+        if rest and len(rest) < len(name) and (_whole_extra_shell(rest) or _exact_shell_word(rest)):
             return True
     matched = _SHELL_WORDS.match(name)
     if matched is None or matched.start("word") != 0:
@@ -448,12 +469,14 @@ def _argument_names_shell(reading: str) -> bool:
     Separators are commas, parentheses, whitespace, ``;``, ``|``, quotes,
     backticks, ``&``, ``>``, ``<``, braces, brackets, ``!``, ``#`` and
     backslash. A ``.exe`` spelling, a hyphen-suffix spelling, a colon-suffix
-    spelling (``bash:*``, ``bash:ls``), and a glob or punctuation mark glued
-    onto a shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``,
-    ``bash^``, ``bash.``, ``-bash``) count as tool names. ``eval``, ``su``,
-    ``env`` and ``sudo`` match only when the whole token is that word.
-    A token containing ``/`` is judged on its last path segment, after a
-    trailing slash is dropped.
+    spelling (``bash:*``, ``bash:ls``), a ``.cmd`` or ``.bat`` launcher
+    (``bash.cmd``, ``sh.bat``), and a glob or punctuation mark glued onto a
+    shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``, ``bash^``,
+    ``bash.``, ``-bash``, ``-su``, ``--eval``) count as tool names. ``eval``,
+    ``su``, ``env``, ``sudo``, ``doas``, ``xargs`` and ``nohup`` match only
+    when the whole token is that word. A token containing ``/`` is judged on
+    its last path segment, after a trailing slash is dropped. A bare
+    directory token such as ``eval/`` is not that word.
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
         if _token_names_shell(piece.strip()):
@@ -482,6 +505,10 @@ def _token_names_shell(name: str) -> bool:
     segment = trimmed.rsplit("/", 1)[-1]
     if not segment or segment == name:
         return False
+    # ``eval/`` is a directory token, not the word eval. ``/bin/sh/`` and
+    # ``sh/`` still judge the last non-empty segment.
+    if name.endswith("/") and "/" not in trimmed:
+        return _exact_shell_word(segment)
     return _token_names_shell(segment)
 
 
