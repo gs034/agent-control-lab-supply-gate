@@ -487,19 +487,23 @@ def test_deny_log_quotes_a_value_that_tries_to_close_the_string(caplog: pytest.L
     [
         (
             "https://username:password@evil.example.invalid/repo.git",
-            "https://evil.example.invalid/repo.git",
+            "https://evil.example.invalid",
         ),
         (
             "https://username@evil.example.invalid/repo.git",
-            "https://evil.example.invalid/repo.git",
+            "https://evil.example.invalid",
         ),
         (
             "https://username:password@evil.example.invalid:8443/repo.git",
-            "https://evil.example.invalid:8443/repo.git",
+            "https://evil.example.invalid:8443",
         ),
         (
             "https://username:password@[2001:db8::1]/repo.git",
-            "https://[2001:db8::1]/repo.git",
+            "https://[2001:db8::1]",
+        ),
+        (
+            "https://username:password@[2001:db8::1]:8443/repo.git?token=SECRET#frag",
+            "https://[2001:db8::1]:8443",
         ),
     ],
 )
@@ -513,16 +517,82 @@ def test_deny_log_strips_origin_userinfo(caplog: pytest.LogCaptureFixture, origi
     line = lines[0]
     assert "username" not in line
     assert "password" not in line
+    assert "repo.git" not in line
+    assert "SECRET" not in line
     assert json.dumps(kept) in line
 
 
-def test_deny_log_keeps_an_at_sign_that_is_not_userinfo(caplog: pytest.LogCaptureFixture) -> None:
-    origin = "https://evil.example.invalid/username:password@file"
+@pytest.mark.parametrize(
+    ("origin", "kept", "hidden"),
+    [
+        (
+            "https://evil.example.invalid/username:password@file?token=SECRET#frag",
+            "https://evil.example.invalid",
+            ("password", "SECRET", "frag", "file"),
+        ),
+        (
+            "https://evil.example.invalid/repo?access_token=SECRET#fragment-token",
+            "https://evil.example.invalid",
+            ("SECRET", "fragment-token", "repo"),
+        ),
+        (
+            "user:TOKEN@git.example.invalid:owner/repo",
+            "git.example.invalid",
+            ("TOKEN", "owner/repo", "user:TOKEN"),
+        ),
+        (
+            "git@git.example.invalid:owner/repo.git",
+            "git.example.invalid",
+            ("owner/repo.git",),
+        ),
+    ],
+)
+def test_deny_log_origin_keeps_only_scheme_host_or_scp_host(
+    caplog: pytest.LogCaptureFixture, origin: str, kept: str, hidden: tuple[str, ...]
+) -> None:
+    """Path, query, fragment and an scp-style token are not written to the DENY line."""
     with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
-        evaluate(_ok_envelope(origin=origin), None)
+        decision = evaluate(_ok_envelope(origin=origin), PIN)
+    assert decision.receipt["origin"] == origin
+    assert decision.reasons == (DenyReason.ORIGIN_NOT_ALLOWLISTED,)
     lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
     assert len(lines) == 1
-    assert json.dumps(origin) in lines[0]
+    line = lines[0]
+    assert json.dumps(kept) in line
+    assert origin not in line
+    for secret in hidden:
+        assert secret not in line
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://user:TOKEN@/owner/repo?access=SECRET",
+        "https:///owner/SECRET",
+        "http://:8443/SECRET",
+        "https://user:TOKEN@evil.example.invalid:99999/repo.git?access=SECRET",
+        "https://user:TOKEN@[::gggg]/repo.git?access=SECRET",
+        "https://[::gggg]/SECRET",
+    ],
+)
+def test_unparseable_origin_logs_placeholder_and_keeps_the_deny_reason(
+    caplog: pytest.LogCaptureFixture, origin: str
+) -> None:
+    """A bad port, bad IPv6 host, or empty host does not become kill_active."""
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        decision = safe_evaluate(_ok_envelope(origin=origin), PIN)
+    assert decision.reasons == (DenyReason.ORIGIN_NOT_ALLOWLISTED,)
+    assert DenyReason.KILL_ACTIVE not in decision.reasons
+    assert decision.receipt["origin"] == origin
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "origin_not_allowlisted" in line
+    assert "kill_active" not in line
+    assert json.dumps("<unparseable-origin>") in line
+    assert origin not in line
+    assert "TOKEN" not in line
+    assert "SECRET" not in line
 
 
 def test_deny_log_escapes_line_separators_and_bidi_marks(caplog: pytest.LogCaptureFixture) -> None:

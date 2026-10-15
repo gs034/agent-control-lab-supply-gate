@@ -6,10 +6,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from supply_gate.allowlist import AllowlistError, load_allowlist
 from supply_gate.digest import digest_ok
@@ -22,6 +23,10 @@ from supply_gate.receipt import build_receipt
 logger = logging.getLogger(__name__)
 # Logged field values are cut here so a DENY line cannot carry a secret in full.
 _LOG_VALUE_MAX = 64
+# Logged when an origin cannot be reduced to scheme://host[:port] or an scp host.
+_UNPARSEABLE_ORIGIN = "<unparseable-origin>"
+# scp-style ``user[:token]@host:path`` or ``host:path``, with no ``://``.
+_SCP_ORIGIN = re.compile(r"^(?:[^@\s]+@)?(?P<host>[^:@/\s]+):\S+$")
 
 KILL_ENV = "ACL_SUPPLY_GATE_KILL"
 # Kill switch spellings, compared after strip() and lower(). A non-empty value
@@ -225,9 +230,11 @@ def _normalize_head(observed_head: str | None) -> str | None:
 def _log_deny(receipt: Mapping[str, Any]) -> None:
     """One DENY line: reason codes and quoted, truncated field values.
 
-    No receipt body and no secrets. Origin userinfo is removed before the
-    value is quoted. Each value is a JSON string, so a space inside it cannot
-    forge another field.
+    No receipt body and no secrets. The logged origin is ``scheme://host[:port]``
+    or the host of an scp-style origin. Userinfo, path, query and fragment are
+    dropped. An origin that cannot be reduced that way is logged as
+    ``<unparseable-origin>`` and does not replace the deny reason. Each value
+    is a JSON string, so a space inside it cannot forge another field.
     """
     reasons = ",".join(str(reason) for reason in receipt.get("reasons") or ())
     fields = " ".join(
@@ -244,17 +251,34 @@ def _log_field(name: str, value: object) -> object:
 
 
 def _strip_origin_userinfo(origin: str) -> str:
-    """Drop ``username:password@`` from an origin URL. Other strings stay as they are."""
-    parts = urlsplit(origin)
-    if parts.username is None and parts.password is None:
-        return origin
-    host = parts.hostname
-    if not host:
-        return origin
-    if ":" in host:
-        host = f"[{host}]"
-    netloc = f"{host}:{parts.port}" if parts.port is not None else host
-    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    """Reduce an origin to ``scheme://host[:port]``, or the host of an scp-style origin.
+
+    Userinfo, path, query and fragment are dropped. An out-of-range port, a bad
+    IPv6 host, an empty host, or any other origin that cannot be reduced this
+    way is ``<unparseable-origin>``. A parse error is caught here so logging
+    cannot turn the original DENY into ``kill_active``.
+    """
+    try:
+        return _origin_log_target(origin)
+    except ValueError:
+        return _UNPARSEABLE_ORIGIN
+
+
+def _origin_log_target(origin: str) -> str:
+    if "://" in origin:
+        parts = urlsplit(origin)
+        host = parts.hostname
+        port = parts.port
+        if not parts.scheme or not host:
+            return _UNPARSEABLE_ORIGIN
+        if ":" in host:
+            host = f"[{host}]"
+        authority = f"{host}:{port}" if port is not None else host
+        return f"{parts.scheme}://{authority}"
+    matched = _SCP_ORIGIN.fullmatch(origin)
+    if matched is None:
+        return _UNPARSEABLE_ORIGIN
+    return matched.group("host")
 
 
 def _log_value(value: object) -> str:
