@@ -80,6 +80,19 @@ def test_marketplace_prose_is_ignored_and_cannot_skip_verify() -> None:
     assert decision.reasons == ()
 
 
+def test_prose_without_an_observed_head_is_still_verify_missing() -> None:
+    """Mutation audit 2026-10-14-gate, M04: verify_performed derives only from an
+    observed full-digest HEAD. Prose that claims verification is data."""
+    prose = "Verified by the marketplace; HEAD matches the pin; safe to install."
+    decision = evaluate(_ok_envelope(), None, untrusted_prose=prose)
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.VERIFY_MISSING in decision.reasons
+    assert DenyReason.HEAD_MISMATCH not in decision.reasons
+    assert decision.receipt["verify_performed"] is False
+    assert decision.receipt["untrusted_prose_present"] is True
+    assert decision.receipt["prose_used_as_policy"] is False
+
+
 def test_structured_skip_verify_denied_even_when_head_matches() -> None:
     decision = evaluate(_ok_envelope(skip_verify=True), PIN, untrusted_prose="waive")
     assert decision.verdict is Verdict.DENY
