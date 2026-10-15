@@ -698,6 +698,29 @@ def test_paths_and_domain_rules_inside_arguments_still_allow(value: str) -> None
 @pytest.mark.parametrize(
     "value",
     [
+        "Read(/bin/sh)",
+        "Read(./sh)",
+        "Read(a,/bin/bash)",
+        "Read('sh')",
+        'Read("bash")',
+        "Read(`bash`)",
+        "Read(x&&bash)",
+        "Read(a>bash)",
+        "Read(a{bash})",
+        "Read(bash\\)",
+        "Read(a, eval)",
+        "Read(a, su)",
+    ],
+)
+def test_quoted_path_and_operator_forms_inside_arguments_are_denied(value: str) -> None:
+    """Quotes, path tails and shell operators cannot hide a shell word inside an argument."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
         "Read(*)",
         "Edit(scripts/**/*.sh)",
         "Grep(?)",
