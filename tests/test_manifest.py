@@ -64,7 +64,7 @@ def test_shell_preapproval_in_manifest_is_deny() -> None:
         assert decision.verdict is Verdict.DENY, token
         assert decision.reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,), token
     for benign in ("Read", "WebFetch", "Publish", "shift", "hash", "cmdline", "execution_log",
-                   "Read(*.sh)", "Edit(scripts/**/*.sh)", "Skill(exec-plan)", "Write(cmd.txt)"):
+                   "Read(*.sh)", "Edit(scripts/**/*.sh)", "Read(a, notes-plan)", "Write(cmd.txt)"):
         assert _evaluate({"permissions": [benign]}).verdict is Verdict.ALLOW, benign
     assert _evaluate({"permissions": ["mcp__shell__run"]}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
     assert _evaluate({"allowedTools": ["Bash"]}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
@@ -303,7 +303,7 @@ def test_shell_rule_after_a_parenthesised_rule_is_denied(manifest: dict) -> None
 
 def test_parenthesised_benign_rules_still_allow() -> None:
     assert _evaluate({"allowed-tools": "Read(*.sh) Grep"}).verdict is Verdict.ALLOW
-    assert _evaluate({"allowed-tools": "Read(bash notes/**), Grep(*)"}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": "Read(notes/bash/*), Grep(*)"}).verdict is Verdict.ALLOW
 
 
 @pytest.mark.parametrize("value", ["Read(src/** Bash", "Read) Bash", "Read((x) Bash"])
@@ -588,7 +588,23 @@ def test_hook_observation_under_the_source_label_does_not_cover_the_command() ->
 
 @pytest.mark.parametrize(
     "value",
-    ["Read(a, Bash, b)", "Read(x,Bash)", "Read( bash )", "Read(Read(Bash))", "Grep(*, shell)", "Read(x, Tool:dash)"],
+    [
+        "Read(a, Bash, b)",
+        "Read(x,Bash)",
+        "Read( bash )",
+        "Read(Read(Bash))",
+        "Grep(*, shell)",
+        "Read(x, Tool:dash)",
+        "Read(a Bash)",
+        "Read(a;Bash)",
+        "Read(a|Bash)",
+        "Read(a, bash.exe)",
+        "Read(a, Bash-x)",
+        "Read(a, Bash:*)",
+        "Read(a, Bash:ls)",
+        "Read(bash notes/**)",
+        "Skill(exec-plan)",
+    ],
 )
 def test_shell_tool_name_inside_parentheses_is_denied(value: str) -> None:
     """A host that splits rules without tracking parentheses would read the inner name as a rule."""
@@ -603,13 +619,48 @@ def test_shell_rule_in_a_bare_parenthesis_group_is_denied() -> None:
 @pytest.mark.parametrize(
     "value",
     [
+        "Read(a, Bash*)",
+        "Read(a, Bash?)",
+        "Read(a, Bash/*)",
+        "Read(a, Bash=*)",
+        "Bash?",
+        "Bash/*",
+        "Bash=*",
+    ],
+)
+def test_glob_or_punctuation_stuck_on_a_tool_word_is_denied(value: str) -> None:
+    """Same deny as a top-level ``Bash*``: the mark is glued onto the shell word."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(notes/bash/*)",
+        "Edit(scripts/**/*.sh)",
+        "Read(*.sh)",
+        "Read(*)",
+        "Grep(?)",
+        "Read(a*b)",
+        "Write(cmd.txt)",
+        "WebFetch(domain:sh.example)",
+        "Read(a, domain:sh.example)",
+    ],
+)
+def test_paths_and_domain_rules_inside_arguments_still_allow(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
         "Read(*)",
         "Edit(scripts/**/*.sh)",
         "Grep(?)",
         "Read(a*b)",
-        "Read(bash notes/**)",
         "Write(cmd.txt)",
-        "Skill(exec-plan)",
+        "Read(a, notes-plan)",
         "WebFetch(domain:sh.example)",
         "Read(a, hash, dashboard)",
         "Read(notes/bash/*)",
