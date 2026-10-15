@@ -720,6 +720,33 @@ def test_quoted_path_and_operator_forms_inside_arguments_are_denied(value: str) 
 
 @pytest.mark.parametrize(
     "value",
+    ["eval_runner", "run_eval", "mcp__lab__eval", "su-docs"],
+)
+def test_underscore_or_hyphen_keeps_eval_and_su_inside_the_name(value: str) -> None:
+    """eval and su do not treat underscore or hyphen as a word break."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": f"Read(a, {value})"}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(a<bash)",
+        "Read(a, [bash])",
+        "Read(a, !bash)",
+        "Read(a, bash#x)",
+        "Read(a, /bin/sh/)",
+        "Read(a, env)",
+        "Read(a, sudo)",
+    ],
+)
+def test_more_argument_marks_and_launch_words_are_denied(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
     [
         "Read(*)",
         "Edit(scripts/**/*.sh)",

@@ -42,10 +42,16 @@ _KEY_ALIASES = {
 # (mcp__ash__x, a.sh); that is the fail-closed side of the trade.
 _SHELL_WORDS = re.compile(
     r"(?:^|[^a-z])(?P<word>"
-    r"bash|sh|shell|exec|execute|eval|cmd|powershell|pwsh|zsh|terminal|run_command|run-command"
-    r"|ash|dash|fish|ksh|csh|tcsh|busybox|su"
+    r"bash|sh|shell|exec|execute|cmd|powershell|pwsh|zsh|terminal|run_command|run-command"
+    r"|ash|dash|fish|ksh|csh|tcsh|busybox"
     r")(?P<tail>[^a-z]|$)"
 )
+# eval and su are argument grants, but "_" and "-" stay inside the name.
+# eval_runner, run_eval, mcp__lab__eval and su-docs are not grants. A path
+# or extension still splits them, so /bin/su and su.exe are grants.
+_EVAL_SU_WORDS = re.compile(r"(?:^|[^a-z_-])(?:eval|su)(?:[^a-z_-]|$)")
+# env and sudo are judged in arguments on the ordinary whole-word boundary.
+_ARGUMENT_LAUNCH_WORDS = re.compile(r"(?:^|[^a-z])(?:env|sudo)(?:[^a-z]|$)")
 # A glob or one of these marks glued straight onto a shell word (``bash*``,
 # ``bash?``, ``bash/*``, ``bash=*``). A dot stays out of this set so a file
 # name such as ``cmd.txt`` is not a tool spelling.
@@ -62,21 +68,23 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # A host that splits a rule string without tracking parentheses can read a word
 # inside an argument as a rule of its own (``Read(a, Bash)``, ``Read(a Bash)``).
 # The argument is cut on commas, parentheses, whitespace, ``;``, ``|``,
-# quotes, backticks, ``&``, ``>``, braces and backslash. Whitespace is
-# included because the top-level rule split cuts on whitespace, and a host
-# that ignores parentheses would apply that cut inside the argument.
+# quotes, backticks, ``&``, ``>``, ``<``, braces, brackets, ``!``, ``#``
+# and backslash. Whitespace is included because the top-level rule split
+# cuts on whitespace, and a host that ignores parentheses would apply that
+# cut inside the argument.
 # A piece that is a bare tool name, a ``.exe`` variant, a hyphen-suffix
 # variant, or a colon-suffix variant (``bash.exe``, ``bash-x``, ``bash:*``,
-# ``bash:ls``) is judged with the same shell-word match as a head, including
-# the shell-launch verbs ``eval`` and ``su``. A glob or punctuation mark
-# glued straight onto that word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``)
-# is judged the same way a rule head ``bash*`` is. A token that contains
-# ``/`` is judged on its last path segment (``/bin/sh``, ``./sh``). A normal
-# path whose last segment is not a shell word, and a ``domain:`` rule, stay
-# argument syntax (``notes/bash/*``, ``scripts/**/*.sh``,
-# ``domain:sh.example``), as does a dotted name that is not a ``.exe``
-# variant (``Write(cmd.txt)``).
-_ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\\\\\s]+")
+# ``bash:ls``) is judged with the same shell-word match as a head. ``eval``
+# and ``su`` use the narrower boundary above. ``env`` and ``sudo`` use the
+# ordinary whole-word boundary, in arguments only. A glob or punctuation
+# mark glued straight onto a shell word (``bash*``, ``bash?``, ``bash/*``,
+# ``bash=*``) is judged the same way a rule head ``bash*`` is. A token that
+# contains ``/`` is judged on its last path segment, after a trailing slash
+# is dropped (``/bin/sh``, ``./sh``, ``/bin/sh/``). A normal path whose last
+# segment is not a shell word, and a ``domain:`` rule, stay argument syntax
+# (``notes/bash/*``, ``scripts/**/*.sh``, ``domain:sh.example``), as does a
+# dotted name that is not a ``.exe`` variant (``Write(cmd.txt)``).
+_ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\[\\]!#<\\\\\\s]+")
 _ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
@@ -416,12 +424,14 @@ def _argument_names_shell(reading: str) -> bool:
     """True when a tool name inside a rule's parentheses is shell-class.
 
     Separators are commas, parentheses, whitespace, ``;``, ``|``, quotes,
-    backticks, ``&``, ``>``, braces and backslash. A ``.exe`` spelling, a
-    hyphen-suffix spelling, a colon-suffix spelling (``bash:*``, ``bash:ls``),
-    and a glob or punctuation mark glued onto a shell word (``bash*``,
-    ``bash?``, ``bash/*``, ``bash=*``) count as tool names. The shell-launch
-    verbs ``eval`` and ``su`` use that same match. A token containing ``/``
-    is judged on its last path segment.
+    backticks, ``&``, ``>``, ``<``, braces, brackets, ``!``, ``#`` and
+    backslash. A ``.exe`` spelling, a hyphen-suffix spelling, a colon-suffix
+    spelling (``bash:*``, ``bash:ls``), and a glob or punctuation mark glued
+    onto a shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``) count as
+    tool names. ``eval`` and ``su`` use a boundary that keeps ``_`` and ``-``
+    inside the name. ``env`` and ``sudo`` use the ordinary whole-word
+    boundary. A token containing ``/`` is judged on its last path segment,
+    after a trailing slash is dropped.
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
         if _token_names_shell(piece.strip()):
@@ -429,18 +439,26 @@ def _argument_names_shell(reading: str) -> bool:
     return False
 
 
+def _argument_word_is_shell(name: str) -> bool:
+    """True when an argument token names a shell, including eval, su, env and sudo."""
+    if _EVAL_SU_WORDS.search(name) or _ARGUMENT_LAUNCH_WORDS.search(name):
+        return True
+    return bool(_ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name))
+
+
 def _token_names_shell(name: str) -> bool:
     """True when ``name``, or the last segment of a ``/`` path, is shell-class."""
     if not name:
         return False
-    if _stuck_on_shell(name) or (
-        _ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name)
-    ):
+    if _stuck_on_shell(name) or _argument_word_is_shell(name):
         return True
     if "/" not in name:
         return False
-    segment = name.rsplit("/", 1)[-1]
-    if segment == name:
+    trimmed = name.rstrip("/")
+    if not trimmed:
+        return False
+    segment = trimmed.rsplit("/", 1)[-1]
+    if not segment or segment == name:
         return False
     return _token_names_shell(segment)
 
