@@ -157,14 +157,20 @@ _ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\[\\]!#<=+\\\\\\s]+")
 # ``a*bash``). On a path they are applied only to the last segment, so an
 # ordinary glob (``src/*.py``, ``tests/eval/*``, ``notes/bash/*``) stays a glob.
 _MARK_SPLIT = re.compile(r"[%~^*?]+")
-_ARGUMENT_TOOL_NAME = re.compile(
-    r"[a-z0-9_:@]+(?:\.(?:exe|cmd|bat|ps1|com)|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*"
-)
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
 _MCP_TYPES = frozenset({"stdio", "sse", "http", "streamable-http"})
 _MCP_REMOTE_TYPES = frozenset({"sse", "http", "streamable-http"})
+# Launch fields only mean something next to a ``command``. On an entry without
+# one they would change what runs without changing the observation key.
+_MCP_LAUNCH_FIELDS = ("args", "env", "cwd")
+# A ``source`` spelled as a URL (``scheme://``) names something fetched from a
+# remote host, which no local digest can pin.
+_URL_SCHEME = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+# An argument piece longer than this is not read as a tool name. It is judged
+# by the shell-word match alone, so any shell word inside it denies.
+_MAX_ARGUMENT_PIECE = 256
 _HOOK_STUB_KEYS = frozenset({"source", "pin", "name"})
 _HOOK_GROUP_KEYS = frozenset({"matcher", "hooks"})
 _HOOK_COMMAND_KEYS = frozenset(
@@ -299,11 +305,21 @@ def _mcp_entry(entry: Any) -> PinnedSource:
         raise ManifestError("remote mcp server needs a url")
     if transport == "stdio" and command is None and source is None:
         raise ManifestError("stdio mcp server needs a command")
+    if command is None:
+        stray = [key for key in _MCP_LAUNCH_FIELDS if entry.get(key) is not None]
+        if stray:
+            raise ManifestError(f"mcp_servers entry without a command cannot carry {', '.join(stray)}")
+    if url is not None and command is not None and transport is None:
+        raise ManifestError("mcp_servers entry with both a url and a command needs a type")
     if source is None:
         source = url or command
     if source is None:
         raise ManifestError("mcp_servers entry needs a source")
-    remote = transport in _MCP_REMOTE_TYPES or (url is not None and command is None)
+    remote = (
+        transport in _MCP_REMOTE_TYPES
+        or (url is not None and command is None)
+        or _URL_SCHEME.match(source) is not None
+    )
     launch = ""
     if command is not None:
         launch = _launch_record(
@@ -498,13 +514,34 @@ def _reading_grants_shell(reading: str) -> bool:
         head = rule.split("(", 1)[0].strip()
         # A shell grant wins over an ill-formed head, so ``Bash=*`` is denied
         # the same way ``Bash*`` is, rather than failing the name check first.
-        if _stuck_on_shell(head) or _whole_extra_shell(head) or _token_names_shell(head):
+        if (
+            _stuck_on_shell(head)
+            or _whole_extra_shell(head)
+            or _token_names_shell(head)
+            or _mcp_server_wide(head)
+        ):
             return True
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
             return True
     return _argument_names_shell(reading)
+
+
+def _mcp_server_wide(name: str) -> bool:
+    """True when ``name`` is ``mcp__<server>`` with no ``__<tool>`` segment.
+
+    A host reads such a rule as every tool on that server, so it pre-approves
+    whatever shell-class tool the server exposes. An empty server or tool
+    segment (``mcp__``, ``mcp__srv__``, ``mcp____run``) is read the same way.
+    ``mcp__srv__tool`` names one tool and is judged by its words as before.
+    The camelCase reading only inserts ``_`` between two letters or digits, so
+    it never adds or removes a ``__`` separator.
+    """
+    parts = name.split("__")
+    if parts[0] != "mcp" or len(parts) < 2:
+        return False
+    return len(parts) == 2 or not all(parts[1:])
 
 
 def _has_nonspace_control(text: str) -> bool:
@@ -587,7 +624,13 @@ def _argument_names_shell(reading: str) -> bool:
     grants, while ``/bin/sh/`` still is.
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
-        if _token_names_shell(piece.strip()):
+        name = piece.strip()
+        if len(name) > _MAX_ARGUMENT_PIECE:
+            # Past the cap the piece is not a tool name. Any shell word in it denies.
+            if _SHELL_WORDS.search(name) or _mcp_server_wide(name):
+                return True
+            continue
+        if _mcp_server_wide(name) or _token_names_shell(name):
             return True
     return False
 
@@ -665,6 +708,82 @@ def _exact_launcher_shell(name: str) -> bool:
     return False
 
 
+# One pass, one state per character. The accepted language is the one the
+# pattern ``[a-z0-9_:@]+(?:\.(?:exe|cmd|bat|ps1|com)|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*``
+# described. That pattern let ``:`` belong to the name run or start a suffix,
+# which backtracked exponentially on a near miss such as ``a-a:a-a:...!``.
+# Both readings are one state, so the cost is linear in the length. ``.cmd``,
+# ``.bat``, ``.ps1`` and ``.com`` are extra suffix paths beside ``.exe``;
+# ``cmd`` and ``com`` share a first letter and still take one step each.
+#   name      in a name run
+#   name_or   in a name run, and the last ``:`` may also have started a suffix
+#   name_suffix  in a name run that may also be a ``:`` suffix
+#   colon     just after a ``:`` that can only start a suffix
+#   suffix    in a ``:`` suffix
+#   hyphen    just after ``-``
+#   dot, dot_*  inside ``.exe``, ``.cmd``, ``.bat``, ``.ps1`` or ``.com``
+#   exe       after one of those suffixes
+_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_@")
+_COLON_GLOBS = frozenset("*?")
+_DOT_NEXT = {
+    "dot": {"e": "dot_e", "c": "dot_c", "b": "dot_b", "p": "dot_p"},
+    "dot_e": {"x": "dot_ex"},
+    "dot_ex": {"e": "exe"},
+    "dot_c": {"m": "dot_cm", "o": "dot_co"},
+    "dot_cm": {"d": "exe"},
+    "dot_co": {"m": "exe"},
+    "dot_b": {"a": "dot_ba"},
+    "dot_ba": {"t": "exe"},
+    "dot_p": {"s": "dot_ps"},
+    "dot_ps": {"1": "exe"},
+}
+_SCAN_ACCEPT = frozenset({"name", "name_or", "name_suffix", "suffix", "exe"})
+
+
+def _scan_step(state: str, char: str) -> str | None:
+    is_name = char in _NAME_CHARS
+    if state in {"start", "hyphen"}:
+        return "name" if is_name or char == ":" else None
+    if state == "colon":
+        return "suffix" if is_name or char in _COLON_GLOBS else None
+    if state in _DOT_NEXT:
+        return _DOT_NEXT[state].get(char)
+    # name, name_or, name_suffix, suffix and exe all end an item here.
+    if char == "-":
+        return "hyphen"
+    if char == ".":
+        return "dot"
+    if state == "exe":
+        return "colon" if char == ":" else None
+    if state == "name":
+        if is_name:
+            return "name"
+        return "name_or" if char == ":" else None
+    if state in {"name_or", "name_suffix"}:
+        if is_name:
+            return "name_suffix"
+        if char == ":":
+            return "name_or"
+        return "suffix" if char in _COLON_GLOBS else None
+    # suffix
+    if is_name or char in _COLON_GLOBS:
+        return "suffix"
+    return "colon" if char == ":" else None
+
+
+def _is_argument_tool_name(name: str) -> bool:
+    """True when ``name`` is a bare tool name or a launcher, ``-`` or ``:`` suffix spelling of one.
+
+    Launcher suffixes are ``.exe``, ``.cmd``, ``.bat``, ``.ps1`` and ``.com``.
+    """
+    state: str | None = "start"
+    for char in name:
+        state = _scan_step(state, char)
+        if state is None:
+            return False
+    return state in _SCAN_ACCEPT
+
+
 def _argument_word_is_shell(name: str) -> bool:
     """True when an argument token names a shell, including eval, su, env and sudo."""
     if "/" in name:
@@ -675,7 +794,7 @@ def _argument_word_is_shell(name: str) -> bool:
     base = normalized.split(":", 1)[0]
     if any(base.endswith(suffix) for suffix in _LAUNCHER_SUFFIXES):
         return _exact_launcher_shell(normalized)
-    return bool(_ARGUMENT_TOOL_NAME.fullmatch(normalized) and _SHELL_WORDS.search(normalized))
+    return bool(_is_argument_tool_name(normalized) and _SHELL_WORDS.search(normalized))
 
 
 def _token_names_shell(name: str, *, path_segment: bool = False) -> bool:
