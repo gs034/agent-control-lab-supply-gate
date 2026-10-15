@@ -80,6 +80,20 @@ Each row carries a status as of 14 October 2026. **mitigated**: a test or an `ev
 
 ALLOW only when the envelope parses, origin is allowlisted, kill is off, update policy is accepted where required, observed HEAD is present, and that HEAD exactly matches the pin. Any other outcome is DENY with a deterministic host JSON receipt.
 
+## Mutation-audit harness
+
+`scripts/mutation_audit.py` and `scripts/mutation_activation.py` are maintainer tooling, not part of the gate. They measure how many specified faults the frozen test suite catches (`audits/README.md`). Everything committed under `audits/<id>/` comes from a pull request, so the seal, the mutants and the sealed commit are input. The maintainer runs the suite of the sealed commit on their own machine. No CI workflow runs the harness. The harness is a port of the pep sibling's fixed copy, and the two scripts are the same code apart from the default scope, the default package and one report label.
+
+| Finding | Rule | Fail-closed outcome | Status (15 Oct 2026) |
+| --- | --- | --- | --- |
+| S-15: sealed commit is not the reviewed tree (P-1 class) | the sealed commit must be an ancestor of the commit that added `freeze.json`, and nothing outside `audits/<id>/` may differ between it and that freeze commit or HEAD; the sealed tree may not carry `conftest.py` outside `tests/`, `sitecustomize.py`, `usercustomize.py` or a `.pth` file; pytest starts with `python -P` | `run` refuses before any test runs | mitigated by the port: `tests/test_mutation_audit.py::test_s15_conftest_from_a_reverted_commit_never_runs` and the startup-hook tests |
+| S-16: outputs written through links, seal fields unchecked (P-2 class) | `audits/`, `audits/<id>/` and `mutants/` must be real directories; outputs and inputs must be single-link regular files; writes go through descriptors and a rename; every seal field read back is validated | `freeze`, `run` or `report` refuses | mitigated by the port: the P-2 tests in `tests/test_mutation_audit.py` |
+| S-17: archive differs from the reviewed blobs (P-6, P-7 class) | the sealed tree holds only regular files, no `.gitattributes`, and nothing in `audits/<id>/` but the frozen mutants; `audits/` is left out of the archive; git runs with no outside attributes file; the extracted copy must be exactly the sealed blobs | `run` refuses, or aborts before any mutant | mitigated by the port: the P-6 and P-7 tests in `tests/test_mutation_audit.py` |
+| S-18: defaults named the pep sibling | default scope `supply_gate/gate.py`, `supply_gate/manifest.py`, `supply_gate/update_policy.py`; default package `supply_gate` | not a security control; a wrong default refused to freeze or failed to import | mitigated: `tests/test_mutation_audit.py::test_defaults_name_the_supply_gate_sources_and_package` |
+| Audit 2026-10-14-gate provenance | its seal names commit `a8de8e4`, which is absent from this repository and from origin; its sealed test and `pyproject.toml` hashes match the pre-rebase commit `2941253`, not the merged history; it ran on the harness copy without the P-1, P-2, P-6 and P-7 fixes | `verify` refuses it at every commit | **accepted residual** until a re-run under a new audit id with the fixed harness, which is planned; its results are indicative only (`audits/README.md`) |
+
+Residual for the harness: a maintainer who runs it executes the reviewed suite of the sealed commit with their own privileges. The checks above bind what runs to what a reviewer sees. They do not make the reviewed code safe to run.
+
 ## Fail-closed
 
 There is no path where untrusted prose installs without verify. If the caller omits `observed_head`, the gate returns DENY / `verify_missing`. If checkout HEAD has moved, the gate returns DENY / `head_mismatch` even when the advertised pin looks well-formed.
