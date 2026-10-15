@@ -34,14 +34,14 @@ def _evaluate(manifest: dict[str, object], **kwargs: object):
 
 def test_pinned_manifest_with_verified_hooks_still_allows() -> None:
     manifest = {
-        "mcp_servers": [{"name": "files", "source": "https://mcp.example.invalid/files", "pin": PIN}],
+        "mcp_servers": [{"name": "files", "source": "servers/files", "pin": PIN}],
         "permissions": ["Read", "Edit"],
         "hooks": [{"name": "post-install", "source": "hooks/post_install.py", "pin": HOOK_PIN}],
     }
     decision = _evaluate(
         manifest,
         observed_hooks={"hooks/post_install.py": HOOK_PIN},
-        observed_mcp_servers={"https://mcp.example.invalid/files": PIN},
+        observed_mcp_servers={"servers/files": PIN},
     )
     assert decision.verdict is Verdict.ALLOW
     assert decision.receipt["verify_performed"] is True
@@ -822,3 +822,84 @@ def test_camel_case_shell_tool_names_are_shell_class(value: str) -> None:
 )
 def test_camel_case_names_without_a_shell_word_still_allow(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+# S-7: harness shared by the gated-path tests below.
+GATED_ORIGIN = "https://git.example.invalid/x.git"
+GATED_HEAD = "a" * 40
+SERVER_PIN = "b" * 40
+
+
+def _gated(manifest: dict[str, object], observed_mcp_servers: object = None):
+    from supply_gate.allowlist import AllowlistConfig
+
+    envelope = {"origin": GATED_ORIGIN, "expected_sha": GATED_HEAD, "caller": "host", "manifest": manifest}
+    return gated_install_or_update(
+        envelope,
+        RecordingStubAdapter(GATED_HEAD, observed_mcp_servers=observed_mcp_servers),
+        allowlist=AllowlistConfig(origins=frozenset({GATED_ORIGIN}), source="t"),
+        update_policy_raw={"mode": "pin_and_verify"},
+        use_env=False,
+    )
+
+
+def test_s7_source_entry_with_launch_fields_is_invalid_on_the_gated_path() -> None:
+    """S-7 PoC: args, env and cwd on a source entry changed what runs but not the observation key."""
+    server = {
+        "source": "pkg-mcp",
+        "args": ["--allow-shell"],
+        "env": {"NODE_OPTIONS": "--require /tmp/x.js"},
+        "cwd": "/tmp/a",
+        "pin": SERVER_PIN,
+    }
+    decision = _gated({"mcp_servers": [server]}, {"pkg-mcp": SERVER_PIN})
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.ENVELOPE_INVALID,)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"args": ["--allow-shell"]},
+        {"args": []},
+        {"env": {"NODE_OPTIONS": "--require /tmp/x.js"}},
+        {"cwd": "/tmp/a"},
+        {"type": "stdio", "args": ["-x"]},
+        {"type": "http", "url": "https://mcp.example.invalid/s", "args": ["-x"]},
+    ],
+)
+def test_s7_launch_field_without_a_command_is_invalid(extra: dict) -> None:
+    server = {"source": "pkg-mcp", "pin": SERVER_PIN, **extra}
+    for manifest in ({"mcp_servers": [server]}, {"mcpServers": {"pkg": server}}):
+        assert _gated(manifest, {"pkg-mcp": SERVER_PIN}).reasons == (DenyReason.ENVELOPE_INVALID,)
+
+
+def test_s7_plain_source_entry_and_command_entry_still_allow() -> None:
+    plain = {"source": "pkg-mcp", "pin": SERVER_PIN}
+    assert _gated({"mcp_servers": [plain]}, {"pkg-mcp": SERVER_PIN}).verdict is Verdict.ALLOW
+    command = {"source": "pkg-mcp", "command": "npx", "args": ["-y", "m"], "env": {"A": "1"}, "cwd": "/w", "pin": SERVER_PIN}
+    observed = {mcp_observation_key(command): SERVER_PIN}
+    assert _gated({"mcp_servers": [command]}, observed).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["https://evil.example/mcp", "HTTP://evil.example/mcp", "wss://evil.example/mcp", "git+https://evil.example/m.git"],
+)
+def test_s7_url_shaped_source_is_remote(source: str) -> None:
+    """A source spelled as a URL is fetched from a remote host, so no observed digest can pin it."""
+    for server in ({"source": source, "pin": SERVER_PIN}, {"source": source, "command": "npx", "pin": SERVER_PIN}):
+        observed = {source: SERVER_PIN, mcp_observation_key(server): SERVER_PIN}
+        decision = _gated({"mcp_servers": [server]}, observed)
+        assert decision.reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+
+
+def test_s7_url_and_command_without_a_type_is_invalid() -> None:
+    """The host could launch the command or connect to the url; the gate cannot tell which is observed."""
+    server = {"url": "https://evil.example/mcp", "command": "npx", "pin": SERVER_PIN}
+    observed = {"https://evil.example/mcp": SERVER_PIN}
+    assert _gated({"mcp_servers": [server]}, observed).reasons == (DenyReason.ENVELOPE_INVALID,)
+    for transport in ("stdio", "http"):
+        typed = {**server, "type": transport}
+        observed = {"https://evil.example/mcp": SERVER_PIN, mcp_observation_key(typed): SERVER_PIN}
+        assert _gated({"mcp_servers": [typed]}, observed).reasons == (DenyReason.MCP_SERVER_UNPINNED,)

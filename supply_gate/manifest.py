@@ -90,6 +90,12 @@ _MCP_ENTRY_KEYS = frozenset(
 )
 _MCP_TYPES = frozenset({"stdio", "sse", "http", "streamable-http"})
 _MCP_REMOTE_TYPES = frozenset({"sse", "http", "streamable-http"})
+# Launch fields only mean something next to a ``command``. On an entry without
+# one they would change what runs without changing the observation key.
+_MCP_LAUNCH_FIELDS = ("args", "env", "cwd")
+# A ``source`` spelled as a URL (``scheme://``) names something fetched from a
+# remote host, which no local digest can pin.
+_URL_SCHEME = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _HOOK_STUB_KEYS = frozenset({"source", "pin", "name"})
 _HOOK_GROUP_KEYS = frozenset({"matcher", "hooks"})
 _HOOK_COMMAND_KEYS = frozenset(
@@ -224,11 +230,21 @@ def _mcp_entry(entry: Any) -> PinnedSource:
         raise ManifestError("remote mcp server needs a url")
     if transport == "stdio" and command is None and source is None:
         raise ManifestError("stdio mcp server needs a command")
+    if command is None:
+        stray = [key for key in _MCP_LAUNCH_FIELDS if entry.get(key) is not None]
+        if stray:
+            raise ManifestError(f"mcp_servers entry without a command cannot carry {', '.join(stray)}")
+    if url is not None and command is not None and transport is None:
+        raise ManifestError("mcp_servers entry with both a url and a command needs a type")
     if source is None:
         source = url or command
     if source is None:
         raise ManifestError("mcp_servers entry needs a source")
-    remote = transport in _MCP_REMOTE_TYPES or (url is not None and command is None)
+    remote = (
+        transport in _MCP_REMOTE_TYPES
+        or (url is not None and command is None)
+        or _URL_SCHEME.match(source) is not None
+    )
     launch = ""
     if command is not None:
         launch = _launch_record(
