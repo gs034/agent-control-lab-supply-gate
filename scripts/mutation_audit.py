@@ -18,9 +18,12 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 import re
+import secrets
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -33,9 +36,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS_DIR = Path(__file__).resolve().parent
 HARNESS_FILES = ("mutation_audit.py", "mutation_activation.py")
-# The harness self-test cannot observe a PEP mutant; leaving it in would only add time and timing noise.
+# The harness self-test cannot observe a mutant of the audited package; leaving it in would only add time and timing noise.
 HARNESS_SELF_TEST = "tests/test_mutation_audit.py"
-DEFAULT_SCOPE = ("pep/approval.py", "pep/gate.py", "pep/evaluate.py")
+DEFAULT_SCOPE = ("supply_gate/gate.py", "supply_gate/manifest.py", "supply_gate/update_policy.py")
+DEFAULT_PACKAGE = "supply_gate"
 REVIEWER_CLASSES = ("person", "other-family", "same-family")
 OUTCOMES = (
     "killed", "survived-never-activated", "survived-oracle-masked", "timeout", "invalid", "harness-fault",
@@ -45,6 +49,17 @@ MODULE = "<module>"
 ANY_CODE = "*"
 _MUTANT_NAME = re.compile(r"M\d{2}\.patch")
 _HUNK = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+# Everything committed under audits/<id>/ is input from a pull request. These
+# are the names the harness writes there, and the files it reads.
+_OUTPUTS = ("freeze.json", "results.json", "results.md")
+_INPUTS = ("equivalent.json",)
+_AUDIT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_PACKAGE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+_PYTHON = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}")
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+# C0, DEL, C1 and the Unicode line and paragraph separators.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+MAX_SEAL_TEXT = 256
 _NOT_IN_PLACE = (
     "rename ", "copy ", "old mode ", "new mode ", "new file mode ", "deleted file mode ",
     "similarity index ", "dissimilarity index ", "Binary files ", "GIT binary patch",
@@ -260,7 +275,7 @@ def freeze(
     root: Path = ROOT,
     commit: str = "HEAD",
     scope: tuple[str, ...] = DEFAULT_SCOPE,
-    package: str = "pep",
+    package: str = DEFAULT_PACKAGE,
     timeout: float = 300.0,
     repair_of: str | None = None,
 ) -> dict:
@@ -268,7 +283,8 @@ def freeze(
     if reviewer not in REVIEWER_CLASSES:
         raise AuditError(f"reviewer must be one of {', '.join(REVIEWER_CLASSES)}")
     audit = _audit_dir(root, audit_id)
-    if (audit / "freeze.json").exists():
+    _check_audit_tree(audit)
+    if os.path.lexists(audit / "freeze.json"):
         raise AuditError(f"{audit_id} is already frozen")
     sha = _git(root, "rev-parse", "--verify", f"{commit}^{{commit}}").strip()
     drift = _git(root, "diff", "--name-only", sha, "--", "tests", "pyproject.toml").split()
@@ -276,9 +292,12 @@ def freeze(
         raise AuditError(f"tests differ from {sha[:7]}: {', '.join(drift)}")
     _refuse_untracked_tests(root)
     mutants = _load_mutants(audit, scope)
-    mutant_hashes = {f"mutants/{m}.patch": _sha256(audit / "mutants" / f"{m}.patch") for m in mutants}
+    mutant_hashes = {f"mutants/{m}.patch": _sha256_of(_read_regular(audit / "mutants" / f"{m}.patch")) for m in mutants}
     if repair_of is not None:
-        original = _read_json(_audit_dir(root, repair_of) / "freeze.json")
+        original_dir = _audit_dir(root, repair_of)
+        _check_audit_tree(original_dir)
+        original = _read_json(original_dir / "freeze.json")
+        _check_seal(original, AuditError)
         if original["mutants"] != mutant_hashes:
             raise AuditError(f"a repair re-run uses the same sealed mutants as {repair_of}")
     record = {
@@ -293,7 +312,9 @@ def freeze(
         "scope": list(scope),
         "timeout_seconds": timeout,
     }
-    _write_json(audit / "freeze.json", record)
+    # The seal run reads back must pass the same checks, so freeze never writes one run would refuse.
+    _check_seal(record, AuditError)
+    _write_json(audit, "freeze.json", record)
     return record
 
 
@@ -326,6 +347,176 @@ def _sealed_commit(root: Path, sealed: dict) -> str:
     return commit
 
 
+def _require_reviewed_commit(root: Path, commit: str, freeze_commit: str, audit_id: str) -> None:
+    """The archived tree must be the tree a reviewer sees, outside this audit's own folder.
+
+    A seal is input, so naming some local commit is not enough: a branch can
+    add code, revert it, and seal the commit that still has it, or add code,
+    freeze, and remove it again after the freeze. The sealed commit must be an
+    ancestor of the commit that added ``freeze.json``, and nothing outside
+    ``audits/<audit_id>/`` may differ between it and the freeze commit or
+    between it and HEAD. That folder is left out of the archive, and
+    ``_refuse_unsafe_tree`` limits what the sealed commit may hold there, so
+    what runs is what the freeze commit and the branch tip both show.
+    """
+    try:
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", "--end-of-options", commit, freeze_commit],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise _git_timed_out(exc) from exc
+    if ancestor.returncode != 0:
+        raise FreezeMismatch(f"the seal's commit {commit[:12]} is not an ancestor of the freeze commit")
+    own = f"audits/{audit_id}"
+    for other, label in ((freeze_commit, "the freeze commit"), ("HEAD", "HEAD")):
+        changed = _git(
+            root, "diff", "--name-only", "-z", "--no-renames", "--end-of-options", commit, other,
+            "--", ".", f":(exclude){own}",
+        ).split("\0")
+        changed = [name for name in changed if name]
+        if changed:
+            raise FreezeMismatch(
+                f"the seal's commit {commit[:12]} differs from {label} outside {own}/: {', '.join(changed)}"
+            )
+
+
+# Files pytest or Python load before any test runs. Only tests/ may carry a conftest.py.
+_STARTUP_NAMES = ("sitecustomize.py", "usercustomize.py")
+
+
+def _refuse_startup_hooks(root: Path, commit: str) -> None:
+    """Refuse a sealed tree with a conftest.py outside tests/ or a Python startup hook."""
+    names = [n for n in _git(root, "ls-tree", "-r", "-z", "--name-only", "--end-of-options", commit).split("\0") if n]
+    bad = [
+        name
+        for name in names
+        if (name.rsplit("/", 1)[-1] == "conftest.py" and not name.startswith("tests/"))
+        or name.rsplit("/", 1)[-1] in _STARTUP_NAMES
+        or name.endswith(".pth")
+    ]
+    if bad:
+        raise FreezeMismatch(f"the sealed tree carries files that run before the tests: {', '.join(bad)}")
+
+
+# The audit folders are input from a pull request and are never part of what runs.
+_AUDITS = "audits"
+_REGULAR_MODES = ("100644", "100755")
+# Run git so that no attributes file outside the repository can change what it writes.
+_ATTRIBUTE_NEUTRAL = {
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "core.attributesFile",
+    "GIT_CONFIG_VALUE_0": os.devnull,
+}
+
+
+def _ls_tree(root: Path, treeish: str, *paths: str) -> list[tuple[str, str, str, str]]:
+    """Every non-tree entry under ``treeish`` as (mode, type, object id, path from the top)."""
+    out = _git(root, "ls-tree", "-r", "-z", "--full-tree", "--end-of-options", treeish, *paths)
+    entries = []
+    for record in out.split("\0"):
+        if record:
+            meta, _, path = record.partition("\t")
+            mode, kind, oid = meta.split(" ")
+            entries.append((mode, kind, oid, path))
+    return entries
+
+
+def _in_audits(path: str) -> bool:
+    return path == _AUDITS or path.startswith(f"{_AUDITS}/")
+
+
+def _refuse_unsafe_tree(root: Path, commit: str, freeze_commit: str, audit_id: str) -> None:
+    """Refuse a sealed tree whose archive could differ from the blobs a reviewer reads.
+
+    Every entry must be a regular file: no symlink, which could point into an
+    audit folder or out of its directory, and no submodule. No
+    ``.gitattributes`` file may appear anywhere, because ``git archive``
+    honours ``export-subst`` and ``export-ignore`` from the tree it writes.
+    The audit's own folder may hold only the mutants, unchanged at the freeze
+    commit, since the diff check does not cover that folder.
+    """
+    own = f"{_AUDITS}/{audit_id}/"
+    frozen = {(m, o, p) for m, _, o, p in _ls_tree(root, freeze_commit, f"{own}mutants")}
+    bad = []
+    for mode, _, oid, path in _ls_tree(root, commit):
+        if path.rsplit("/", 1)[-1] == ".gitattributes":
+            bad.append(f"{path} (attributes change what git archive writes)")
+        elif mode not in _REGULAR_MODES:
+            bad.append(f"{path} (mode {mode}, not a regular file)")
+        elif path.startswith(own) and not (
+            path.startswith(f"{own}mutants/")
+            and _MUTANT_NAME.fullmatch(path[len(own) + len("mutants/"):])
+            and (mode, oid, path) in frozen
+        ):
+            bad.append(f"{path} (inside {own} at the sealed commit)")
+    if bad:
+        raise FreezeMismatch(f"the sealed tree at {commit[:12]} is refused: {', '.join(bad)}")
+
+
+def _archived_tree(root: Path, commit: str) -> dict[str, tuple[str, str]]:
+    """What the archive must hold: every path outside audits/, with its mode and blob id."""
+    return {path: (mode, oid) for mode, _, oid, path in _ls_tree(root, commit) if not _in_audits(path)}
+
+
+def _archive(root: Path, commit: str) -> bytes:
+    """The sealed commit as a tar, without audits/ and with no attributes from outside the repository.
+
+    Pathspec settings from the environment are dropped so the exclusion is
+    read as magic. The extracted copy is still checked blob by blob, because
+    the repository's own ``info/attributes`` can rewrite what this writes.
+    """
+    try:
+        return subprocess.run(
+            ["git", "archive", "--format=tar", "--end-of-options", commit, ".", f":(exclude){_AUDITS}"],
+            cwd=root,
+            env={**{k: v for k, v in os.environ.items() if not k.endswith("_PATHSPECS")}, **_ATTRIBUTE_NEUTRAL},
+            check=True,
+            capture_output=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        ).stdout
+    except subprocess.TimeoutExpired as exc:
+        raise _git_timed_out(exc) from exc
+
+
+def _blob_id(data: bytes, oid_length: int) -> str:
+    algorithm = hashlib.sha1 if oid_length == 40 else hashlib.sha256
+    return algorithm(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _materialised_drift(copy: Path, tree: dict[str, tuple[str, str]]) -> list[str]:
+    """Every path where the extracted copy is not exactly the sealed blobs: extra, missing or different."""
+    found: dict[str, Path] = {}
+    drift = []
+    for dirpath, dirnames, filenames in os.walk(copy):
+        for name in dirnames + filenames:
+            path = Path(dirpath) / name
+            rel = path.relative_to(copy).as_posix()
+            info = path.lstat()
+            if stat.S_ISREG(info.st_mode):
+                found[rel] = path
+            elif not stat.S_ISDIR(info.st_mode):
+                drift.append(f"{rel} (not a regular file)")
+    for rel in sorted(set(found) | set(tree)):
+        if rel not in tree:
+            drift.append(f"{rel} (not in the sealed tree)")
+        elif rel not in found:
+            drift.append(f"{rel} (missing)")
+        else:
+            mode, oid = tree[rel]
+            path = found[rel]
+            if _blob_id(path.read_bytes(), len(oid)) != oid:
+                drift.append(f"{rel} (content differs from blob {oid[:12]})")
+            elif bool(path.stat().st_mode & stat.S_IXUSR) != (mode == "100755"):
+                drift.append(f"{rel} (mode differs from {mode})")
+    return drift
+
+
 def verify(root: Path, sealed: dict, audit_id: str | None = None) -> None:
     """Refuse unless the seal is committed once, and everything it names still matches.
 
@@ -335,6 +526,7 @@ def verify(root: Path, sealed: dict, audit_id: str | None = None) -> None:
     audit_id = sealed.get("audit_id") if audit_id is None else audit_id
     if not isinstance(audit_id, str) or sealed.get("audit_id") != audit_id:
         raise FreezeMismatch(f"the seal names audit {sealed.get('audit_id')!r}, not {audit_id!r}")
+    _check_seal(sealed)
     _refuse_shallow(root, FreezeMismatch)
     _sealed_commit(root, sealed)
     if _python_version().rsplit(".", 1)[0] != sealed["python"].rsplit(".", 1)[0]:
@@ -347,11 +539,17 @@ def verify(root: Path, sealed: dict, audit_id: str | None = None) -> None:
         raise FreezeMismatch(f"{rel}/freeze.json must be committed once and never edited")
     if _git(root, "log", "--format=%H", f"{history[0]}..HEAD", "--", f"{rel}/mutants").split():
         raise FreezeMismatch(f"{rel}/mutants changed after the freeze commit")
+    _require_reviewed_commit(root, sealed["commit"], history[0], audit_id)
+    _refuse_unsafe_tree(root, sealed["commit"], history[0], audit_id)
     _refuse_untracked_tests(root, FreezeMismatch)
     audit = _audit_dir(root, audit_id)
+    _check_audit_tree(audit, FreezeMismatch)
     current = {
         "files": _sealed_hashes(root),
-        "mutants": {f"mutants/{p.name}": _sha256(p) for p in sorted((audit / "mutants").glob("*.patch"))},
+        "mutants": {
+            f"mutants/{p.name}": _sha256_of(_read_regular(p, FreezeMismatch))
+            for p in sorted((audit / "mutants").glob("*.patch"))
+        },
     }
     drifted = sorted(
         path
@@ -370,29 +568,23 @@ def run(
     after_each: Callable[[str], None] | None = None,
 ) -> dict:
     audit = _audit_dir(root, audit_id)
-    if not (audit / "freeze.json").exists():
+    _check_audit_tree(audit)
+    if not os.path.lexists(audit / "freeze.json"):
         raise AuditError(f"{audit_id} is not frozen")
-    if (audit / "results.json").exists():
+    if os.path.lexists(audit / "results.json"):
         raise AuditError(f"{audit_id} has already run; a re-run needs its own freeze")
     sealed = _read_json(audit / "freeze.json")
     verify(root, sealed, audit_id)
     commit = _sealed_commit(root, sealed)
-    try:
-        archive = subprocess.run(
-            ["git", "archive", "--format=tar", "--end-of-options", commit],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            timeout=_GIT_TIMEOUT_SECONDS,
-        ).stdout
-    except subprocess.TimeoutExpired as exc:
-        raise _git_timed_out(exc) from exc
+    _refuse_startup_hooks(root, commit)
+    tree = _archived_tree(root, commit)
+    archive = _archive(root, commit)
     mutants = _load_mutants(audit, tuple(sealed["scope"]))
 
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="mutation-audit-") as tmp:
         work = Path(tmp)
-        copy = _extract(work, archive, sealed)
+        copy = _extract(work, archive, sealed, tree)
         try:
             baseline = _run_suite(work, copy, sealed, [])
         except AuditAborted as exc:
@@ -409,7 +601,7 @@ def run(
     for mutant_id, mutant in mutants.items():
         began = time.monotonic()
         with tempfile.TemporaryDirectory(prefix=f"mutation-audit-{mutant_id}-") as tmp:
-            row = _run_mutant(Path(tmp), archive, sealed, mutant, audit / "mutants" / f"{mutant_id}.patch")
+            row = _run_mutant(Path(tmp), archive, tree, sealed, mutant, audit / "mutants" / f"{mutant_id}.patch")
         row["duration_seconds"] = round(time.monotonic() - began, 2)
         rows.append(row)
         if after_each is not None:
@@ -430,15 +622,17 @@ def run(
         "summary": summarise(rows),
         "timeout_seconds": sealed["timeout_seconds"],
     }
-    _write_json(audit / "results.json", results)
-    (audit / "results.md").write_text(render(results, _equivalents(audit)), encoding="utf-8")
+    text = render(results, _equivalents(audit))
+    _write_json(audit, "results.json", results)
+    _write_in_audit(audit, "results.md", text)
     return results
 
 
 def report(audit_id: str, *, root: Path = ROOT) -> str:
     audit = _audit_dir(root, audit_id)
+    _check_audit_tree(audit)
     text = render(_read_json(audit / "results.json"), _equivalents(audit))
-    (audit / "results.md").write_text(text, encoding="utf-8")
+    _write_in_audit(audit, "results.md", text)
     return text
 
 
@@ -459,6 +653,7 @@ def summarise(rows: list[dict], equivalent: set[str] | frozenset[str] = frozense
 
 
 def render(results: dict, equivalents: dict[str, dict]) -> str:
+    _check_rendered(results, equivalents)
     rows = results["mutants"]
     by_id = {r["id"]: r for r in rows}
     signed = {m for m, e in equivalents.items() if str(e.get("signed_off_by", "")).strip()}
@@ -471,7 +666,7 @@ def render(results: dict, equivalents: dict[str, dict]) -> str:
     if results.get("repair_of"):
         out += [f"Repair result on the same set as `{results['repair_of']}`. This is not a new estimate.", ""]
     out += [
-        f"- PEP commit: `{results['commit']}`",
+        f"- Commit: `{results['commit']}`",
         f"- Python: {results['python']}",
         f"- Mutants specified by: {results['reviewer']}",
         f"- Timeout per run: {results['timeout_seconds']} s",
@@ -526,7 +721,9 @@ def render(results: dict, equivalents: dict[str, dict]) -> str:
     return "\n".join(out) + "\n"
 
 
-def _run_mutant(work: Path, archive: bytes, sealed: dict, mutant: Mutant, patch: Path) -> dict:
+def _run_mutant(
+    work: Path, archive: bytes, tree: dict[str, tuple[str, str]], sealed: dict, mutant: Mutant, patch: Path
+) -> dict:
     row = {
         "id": mutant.mutant_id,
         "file": mutant.target,
@@ -536,7 +733,7 @@ def _run_mutant(work: Path, archive: bytes, sealed: dict, mutant: Mutant, patch:
         "killing_tests": [],
         "detail": "",
     }
-    copy = _extract(work, archive, sealed)
+    copy = _extract(work, archive, sealed, tree)
     target = copy / mutant.target
     if not target.is_file():
         return {**row, "outcome": "invalid", "detail": "the target file is not in the frozen commit"}
@@ -598,7 +795,9 @@ def _run_suite(
     if target is not None:
         env.update(MUTATION_AUDIT_TARGET=str(target), MUTATION_AUDIT_TARGETS=json.dumps(targets))
     cmd = [
-        sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "mutation_activation",
+        # -P keeps the archive root off sys.path at interpreter start, so a
+        # root sitecustomize.py or usercustomize.py is never imported.
+        sys.executable, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "mutation_activation",
         f"--ignore={HARNESS_SELF_TEST}",
     ]
     proc = subprocess.Popen(
@@ -644,7 +843,8 @@ def _applied_where_stated(mutant: Mutant, mutated: str) -> bool:
     return True
 
 
-def _extract(work: Path, archive: bytes, sealed: dict) -> Path:
+def _extract(work: Path, archive: bytes, sealed: dict, tree: dict[str, tuple[str, str]]) -> Path:
+    """Extract the archive and check it is exactly ``tree``, the sealed blobs outside audits/."""
     copy = work / "tree"
     copy.mkdir()
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
@@ -652,6 +852,11 @@ def _extract(work: Path, archive: bytes, sealed: dict) -> Path:
             tar.extractall(copy, filter="data")
         else:
             tar.extractall(copy)
+    materialised = _materialised_drift(copy, tree)
+    if materialised:
+        raise AuditAborted(
+            f"the archive of {sealed['commit'][:7]} is not the sealed tree: {', '.join(materialised)}"
+        )
     drift = _sealed_drift(copy, sealed)
     if drift:
         raise AuditAborted(f"{', '.join(drift)} at {sealed['commit'][:7]} does not match the seal")
@@ -696,7 +901,7 @@ def _load_mutants(audit: Path, scope: tuple[str, ...]) -> dict[str, Mutant]:
     for path in paths:
         if not _MUTANT_NAME.fullmatch(path.name):
             raise AuditError(f"mutant files are named Mnn.patch: {path.name}")
-        mutant = parse_mutant(path.stem, path.read_text(encoding="utf-8"))
+        mutant = parse_mutant(path.stem, _read_regular(path).decode("utf-8"))
         if mutant.target not in scope:
             raise AuditError(f"{path.stem} mutates {mutant.target}, outside the scope {', '.join(scope)}")
         mutants[path.stem] = mutant
@@ -718,13 +923,183 @@ def _refuse_untracked_tests(root: Path, error: type[AuditError] = AuditError) ->
 
 def _equivalents(audit: Path) -> dict[str, dict]:
     path = audit / "equivalent.json"
-    return _read_json(path) if path.exists() else {}
+    return _read_json(path) if os.path.lexists(path) else {}
 
 
 def _audit_dir(root: Path, audit_id: str) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", audit_id):
+    if not _AUDIT_ID.fullmatch(audit_id):
         raise AuditError(f"bad audit id: {audit_id!r}")
     return root / "audits" / audit_id
+
+
+def _check_audit_tree(audit: Path, error: type[AuditError] = AuditError) -> None:
+    """Refuse ``audits/<id>/`` unless it, and every entry the harness reads or writes there, is plain.
+
+    A pull request can commit a symlink, and a local checkout can hold a FIFO
+    or a hard link. ``audits/``, the audit directory and ``mutants/`` must be
+    real directories. Each output and input name, when present, and each file
+    in ``mutants/`` must be a regular file with one link. A missing directory
+    is not refused here; the caller reports what is missing.
+    """
+    rel = f"audits/{audit.name}"
+    mutants = audit / "mutants"
+    for directory, label in ((audit.parent, "audits"), (audit, rel), (mutants, f"{rel}/mutants")):
+        try:
+            info = os.lstat(directory)
+        except FileNotFoundError:
+            break
+        if not stat.S_ISDIR(info.st_mode):
+            raise error(f"{label} is not a directory (a symlink or special file is refused)")
+    for name in (*_OUTPUTS, *_INPUTS):
+        _check_entry(audit / name, f"{rel}/{name}", error)
+    try:
+        entries = sorted(os.listdir(mutants))
+    except (FileNotFoundError, NotADirectoryError):
+        entries = []
+    for entry in entries:
+        _check_entry(mutants / entry, f"{rel}/mutants/{entry}", error)
+
+
+def _check_entry(path: Path, label: str, error: type[AuditError]) -> None:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(info.st_mode):
+        raise error(f"{label} is not a regular file (a symlink or special file is refused)")
+    if info.st_nlink > 1:
+        raise error(f"{label} has {info.st_nlink} hard links; the harness reads and replaces only single-link files")
+
+
+def _seal_text(value: object, limit: int = MAX_SEAL_TEXT) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= limit and not _CONTROL.search(value)
+
+
+def _check_seal(sealed: object, error: type[AuditError] = FreezeMismatch) -> None:
+    """A committed seal is input. Refuse any field the harness uses or renders that freeze would not write.
+
+    ``commit`` is checked by ``_sealed_commit``. Messages name the field, not
+    its value, so a crafted value is not echoed.
+    """
+    if not isinstance(sealed, dict):
+        raise error("the seal is not a JSON object")
+    if sealed.get("reviewer") not in REVIEWER_CLASSES:
+        raise error(f"the seal's reviewer must be one of {', '.join(REVIEWER_CLASSES)}")
+    if not isinstance(sealed.get("audit_id"), str) or not _AUDIT_ID.fullmatch(sealed["audit_id"]):
+        raise error("the seal's audit_id is not an audit id")
+    repair_of = sealed.get("repair_of")
+    if repair_of is not None and (not isinstance(repair_of, str) or not _AUDIT_ID.fullmatch(repair_of)):
+        raise error("the seal's repair_of is not an audit id")
+    if not isinstance(sealed.get("python"), str) or not _PYTHON.fullmatch(sealed["python"]):
+        raise error("the seal's python is not a version like 3.12.1")
+    if not isinstance(sealed.get("package"), str) or not _PACKAGE.fullmatch(sealed["package"]):
+        raise error("the seal's package is not a dotted Python name")
+    timeout = sealed.get("timeout_seconds")
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+        raise error("the seal's timeout_seconds is not a positive number")
+    scope = sealed.get("scope")
+    if not isinstance(scope, list) or not scope or not all(_seal_text(path) for path in scope):
+        raise error(f"the seal's scope must list single-line paths of at most {MAX_SEAL_TEXT} characters")
+    for key in ("files", "mutants"):
+        table = sealed.get(key)
+        if not isinstance(table, dict) or not all(
+            _seal_text(path) and isinstance(digest, str) and _DIGEST.fullmatch(digest) for path, digest in table.items()
+        ):
+            raise error(f"the seal's {key} must map single-line paths to sha256 digests")
+
+
+def _check_rendered(results: dict, equivalents: dict[str, dict]) -> None:
+    """``results.json`` and ``equivalent.json`` can be committed too. Refuse a header or note that is not one line."""
+    if results.get("reviewer") not in REVIEWER_CLASSES:
+        raise AuditError(f"the results' reviewer must be one of {', '.join(REVIEWER_CLASSES)}")
+    for key in ("audit_id", "commit", "python"):
+        if not _seal_text(results.get(key)):
+            raise AuditError(f"the results' {key} is not a single line of at most {MAX_SEAL_TEXT} characters")
+    if results.get("repair_of") is not None and not _seal_text(results["repair_of"]):
+        raise AuditError(f"the results' repair_of is not a single line of at most {MAX_SEAL_TEXT} characters")
+    timeout = results.get("timeout_seconds")
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise AuditError("the results' timeout_seconds is not a number")
+    for row in results.get("mutants", []):
+        for key in ("id", "file", "intent", "property", "outcome"):
+            if not isinstance(row.get(key), str) or _CONTROL.search(row[key]):
+                raise AuditError(f"a result row's {key} is not a single line")
+    for mutant_id, note in equivalents.items():
+        if not isinstance(note, dict):
+            raise AuditError(f"equivalent.json: {mutant_id!r} is not an object")
+        for key in ("signed_off_by", "argument"):
+            value = note.get(key, "")
+            if not isinstance(value, str) or _CONTROL.search(value):
+                raise AuditError(f"equivalent.json: {mutant_id!r} {key} is not a single line")
+
+
+def _read_regular(path: Path, error: type[AuditError] = AuditError) -> bytes:
+    """Read a committed file without following a link, and only if it is a regular file.
+
+    ``O_NONBLOCK`` keeps a FIFO from blocking the open; the ``fstat`` then refuses it.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise error(f"cannot read {path.name} as a regular file: {exc.strerror}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise error(f"{path.name} is not a regular file")
+        chunks = []
+        while chunk := os.read(fd, 1 << 16):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _write_in_audit(audit: Path, name: str, text: str) -> None:
+    """Replace ``audit/name`` through descriptors, so a link at either path cannot redirect the write.
+
+    The audit directory is opened with ``O_NOFOLLOW`` relative to an
+    ``audits/`` opened the same way. A fresh temporary name is created with
+    ``O_EXCL | O_NOFOLLOW`` in that directory, written and synced, then
+    renamed over ``name``. A rename replaces a link; it never writes through it.
+    """
+    dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        parent = os.open(audit.parent, dir_flags)
+        try:
+            dir_fd = os.open(audit.name, dir_flags, dir_fd=parent)
+        finally:
+            os.close(parent)
+    except OSError as exc:
+        raise AuditError(f"audits/{audit.name} is not a directory the harness can write: {exc.strerror}") from exc
+    try:
+        try:
+            info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            info = None
+        if info is not None and (not stat.S_ISREG(info.st_mode) or info.st_nlink > 1):
+            raise AuditError(f"audits/{audit.name}/{name} is not a single-link regular file; refusing to replace it")
+        tmp = f".{name}.{secrets.token_hex(8)}.tmp"
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            0o666,
+            dir_fd=dir_fd,
+        )
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(text.encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+            raise
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def _rate(killed: int, total: int) -> str:
@@ -789,7 +1164,11 @@ def _git(root: Path, *args: str) -> str:
 
 
 def _sha256(path: Path) -> str:
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return _sha256_of(path.read_bytes())
+
+
+def _sha256_of(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def _python_version() -> str:
@@ -797,11 +1176,11 @@ def _python_version() -> str:
 
 
 def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(_read_regular(path).decode("utf-8"))
 
 
-def _write_json(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def _write_json(audit: Path, name: str, data: dict) -> None:
+    _write_in_audit(audit, name, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
