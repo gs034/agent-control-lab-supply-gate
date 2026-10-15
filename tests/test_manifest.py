@@ -749,6 +749,7 @@ def test_eval_su_env_and_sudo_whole_words_are_denied(value: str) -> None:
         "Read(docs/su/README.md)",
         "Read(eval/results.json)",
         "Read(tests/eval/*)",
+        "Read(src/*.py)",
         "Read(a, bash.txt)",
         "src/env/config.py",
         "Read(src/env/config.py)",
@@ -813,11 +814,35 @@ def test_shell_word_inside_a_longer_path_stays_allowed(value: str) -> None:
         "Read(a+bash)",
         "/usr/bin/doas",
         "xargs.exe",
+        "Read(a%bash)",
+        "a~bash",
+        "a^bash",
+        "a*bash",
+        "a?bash",
+        "Read(a~bash)",
+        "Read(a^bash)",
+        "Read(a*bash)",
+        "Read(a?bash)",
+        "bash..exe",
+        "Read(bash..exe)",
+        "bash.exe.",
+        "Read(bash.exe.)",
+        "Read(a\x00bash)",
+        "bash\x00",
     ],
 )
 def test_more_argument_marks_and_launch_words_are_denied(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
     assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Read(notes\x01.py)", "Read(\x7f)", "file\x01.txt"],
+)
+def test_control_characters_in_rule_text_are_invalid(value: str) -> None:
+    """A control character that does not reveal a shell word makes the rule ill-formed."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.ENVELOPE_INVALID,)
 
 
 @pytest.mark.parametrize(

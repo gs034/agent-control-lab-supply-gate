@@ -108,6 +108,10 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # ``eval.py``), as does a dotted name that is not a launcher suffix
 # (``Write(cmd.txt)``).
 _ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\[\\]!#<=+\\\\\\s]+")
+# ``% ~ ^ * ?`` separate a shell word glued inside a token (``a%bash``,
+# ``a*bash``). On a path they are applied only to the last segment, so an
+# ordinary glob (``src/*.py``, ``tests/eval/*``, ``notes/bash/*``) stays a glob.
+_MARK_SPLIT = re.compile(r"[%~^*?]+")
 _ARGUMENT_TOOL_NAME = re.compile(
     r"[a-z0-9_:@]+(?:\.(?:exe|cmd|bat|ps1|com)|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*"
 )
@@ -412,7 +416,12 @@ def _is_shell_grant(item: str) -> bool:
     invalid: ManifestError | None = None
     # Fixed order, every reading judged: a shell grant in any reading wins over
     # an ill-formed one, so the deny reason does not depend on evaluation order.
-    for reading in (_strip_invisible(norm, " "), _strip_invisible(norm, "")):
+    # A non-whitespace control character is also read as a space, so NUL cannot
+    # hide a shell word; if no reading is a shell grant the rule is ill-formed.
+    readings = [_strip_invisible(norm, " "), _strip_invisible(norm, "")]
+    if _has_nonspace_control(norm):
+        readings.append(_strip_invisible(_controls_to_space(norm), " "))
+    for reading in readings:
         try:
             if _reading_grants_shell(reading):
                 return True
@@ -420,6 +429,8 @@ def _is_shell_grant(item: str) -> bool:
             invalid = invalid or exc
     if invalid is not None:
         raise invalid
+    if _has_nonspace_control(norm):
+        raise ManifestError("permissions rule text contains a control character")
     return False
 
 
@@ -428,13 +439,31 @@ def _reading_grants_shell(reading: str) -> bool:
         head = rule.split("(", 1)[0].strip()
         # A shell grant wins over an ill-formed head, so ``Bash=*`` is denied
         # the same way ``Bash*`` is, rather than failing the name check first.
-        if _stuck_on_shell(head) or _whole_extra_shell(head):
+        if _stuck_on_shell(head) or _whole_extra_shell(head) or _token_names_shell(head):
             return True
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
             return True
     return _argument_names_shell(reading)
+
+
+def _has_nonspace_control(text: str) -> bool:
+    return any(unicodedata.category(char) == "Cc" and not char.isspace() for char in text)
+
+
+def _controls_to_space(text: str) -> str:
+    return "".join(
+        " " if unicodedata.category(char) == "Cc" and not char.isspace() else char for char in text
+    )
+
+
+def _normalize_dots(name: str) -> str:
+    """Collapse repeated dots and drop trailing dots before a launcher suffix check."""
+    collapsed = name
+    while ".." in collapsed:
+        collapsed = collapsed.replace("..", ".")
+    return collapsed.rstrip(".")
 
 
 def _launcher_stem(name: str) -> str:
@@ -448,8 +477,10 @@ def _whole_extra_shell(name: str) -> bool:
     """True when the whole token is eval, su, or a launch word.
 
     A ``:`` suffix is removed first (``eval:*``), then a launcher suffix.
+    Repeated and trailing dots are collapsed first (``bash..exe``, ``bash.exe.``).
     """
-    return _launcher_stem(name.split(":", 1)[0]) in _EXTRA_SHELL_WORDS
+    base = _normalize_dots(name.split(":", 1)[0])
+    return _launcher_stem(base) in _EXTRA_SHELL_WORDS
 
 
 def _exact_shell_word(name: str) -> bool:
@@ -504,7 +535,7 @@ def _argument_names_shell(reading: str) -> bool:
 
 def _exact_launcher_shell(name: str) -> bool:
     """True when ``name`` is exactly a shell word plus one launcher suffix."""
-    base = name.split(":", 1)[0]
+    base = _normalize_dots(name.split(":", 1)[0])
     for suffix in _LAUNCHER_SUFFIXES:
         if not base.endswith(suffix) or len(base) <= len(suffix):
             continue
@@ -517,17 +548,27 @@ def _argument_word_is_shell(name: str) -> bool:
     """True when an argument token names a shell, including eval, su, env and sudo."""
     if "/" in name:
         return False
-    if _whole_extra_shell(name):
+    normalized = _normalize_dots(name)
+    if _whole_extra_shell(normalized):
         return True
-    if any(name.split(":", 1)[0].endswith(suffix) for suffix in _LAUNCHER_SUFFIXES):
-        return _exact_launcher_shell(name)
-    return bool(_ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name))
+    base = normalized.split(":", 1)[0]
+    if any(base.endswith(suffix) for suffix in _LAUNCHER_SUFFIXES):
+        return _exact_launcher_shell(normalized)
+    return bool(_ARGUMENT_TOOL_NAME.fullmatch(normalized) and _SHELL_WORDS.search(normalized))
 
 
 def _token_names_shell(name: str, *, path_segment: bool = False) -> bool:
     """True when ``name``, or the last segment of a ``/`` path, is shell-class."""
     if not name:
         return False
+    # Marks are cut on this token. A path is judged on its last segment only,
+    # so ``src/*.py`` and ``notes/bash/*`` do not split the directory away.
+    if "/" not in name and _MARK_SPLIT.search(name):
+        return any(
+            _token_names_shell(piece, path_segment=path_segment)
+            for piece in _MARK_SPLIT.split(name)
+            if piece
+        )
     # A leading hyphen is a whole token (``-su``), not a path segment (``docs/-su``).
     if _stuck_on_shell(name, hyphen=not path_segment) or _argument_word_is_shell(name):
         return True
