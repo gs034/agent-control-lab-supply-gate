@@ -72,6 +72,17 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # A normal path and a ``domain:`` rule stay argument syntax
 # (``notes/bash/*``, ``scripts/**/*.sh``, ``domain:sh.example``), as does a
 # dotted name that is not a ``.exe`` variant (``Write(cmd.txt)``).
+# camelCase / PascalCase and letter/digit boundaries. Matching is on lowercase
+# text, so without this split ``mcp__x__runCommand`` reads as ``runcommand``
+# and ``execShell`` as ``execshell``, neither of which is a whole shell word.
+# The split reading is judged in addition to the plain one, for heads and for
+# argument tokens alike.
+_CASE_BOUNDARY = re.compile(
+    r"(?<=[a-z])(?=[A-Z])"
+    r"|(?<=[A-Z])(?=[A-Z][a-z])"
+    r"|(?<=[A-Za-z])(?=[0-9])"
+    r"|(?<=[0-9])(?=[A-Za-z])"
+)
 _ARGUMENT_SPLIT = re.compile(r"[,();|\s]+")
 _ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
 _MCP_ENTRY_KEYS = frozenset(
@@ -371,16 +382,19 @@ def _is_shell_grant(item: str) -> bool:
     An invisible format character may be dropped by one host and read as a
     separator by another, so both readings are judged and either one denies.
     """
-    norm = unicodedata.normalize("NFKC", item).lower()
+    norm = unicodedata.normalize("NFKC", item)
     invalid: ManifestError | None = None
     # Fixed order, every reading judged: a shell grant in any reading wins over
     # an ill-formed one, so the deny reason does not depend on evaluation order.
-    for reading in (_strip_invisible(norm, " "), _strip_invisible(norm, "")):
-        try:
-            if _reading_grants_shell(reading):
-                return True
-        except ManifestError as exc:
-            invalid = invalid or exc
+    # Case is folded only after the camelCase reading is taken, so a tool named
+    # runCommand or execShell is judged as run_command and exec_shell.
+    for stripped in (_strip_invisible(norm, " "), _strip_invisible(norm, "")):
+        for reading in (stripped.lower(), _split_case(stripped).lower()):
+            try:
+                if _reading_grants_shell(reading):
+                    return True
+            except ManifestError as exc:
+                invalid = invalid or exc
     if invalid is not None:
         raise invalid
     return False
@@ -423,6 +437,18 @@ def _argument_names_shell(reading: str) -> bool:
         if _ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name):
             return True
     return False
+
+
+def _split_case(text: str) -> str:
+    """Insert ``_`` at camelCase, PascalCase and letter/digit boundaries.
+
+    ``runCommand`` reads as ``run_Command``, ``HTTPShell`` as ``HTTP_Shell``
+    and ``x2bash`` as ``x_2_bash``. The separator is one the shell-word match
+    and the tool-name patterns already accept, so the split only adds word
+    boundaries; it never removes one. Words without an inner capital
+    (``Publish``, ``dashboard``) read the same as before.
+    """
+    return _CASE_BOUNDARY.sub("_", text)
 
 
 def _strip_invisible(text: str, replacement: str) -> str:

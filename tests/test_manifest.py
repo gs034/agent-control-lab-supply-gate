@@ -734,3 +734,48 @@ def test_hook_with_two_distinct_runnables_is_refused() -> None:
         decision = _evaluate(manifest, observed_hooks={"hooks/format.py": HOOK_PIN})
         assert decision.verdict is Verdict.DENY
         assert decision.reasons == (DenyReason.ENVELOPE_INVALID,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "mcp__x__runCommand",
+        "mcp__srv__execShell",
+        "mcp__srv__ExecShell(*)",
+        "runCommand",
+        "RunShell",
+        "HTTPShell",
+        "mcp__x__runSH",
+        "mcp__x__shellExec",
+        "mcp__x__openTerminal",
+        "mcp__x__Bash2Run",
+        "Read(a, runCommand)",
+        "Read(a, mcp__srv__execShell)",
+        "Read(x) mcp__x__runCommand",
+    ],
+)
+def test_camel_case_shell_tool_names_are_shell_class(value: str) -> None:
+    """S-4: camelCase and PascalCase boundaries split words for heads and argument tokens."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "WebFetch",
+        "TodoWrite",
+        "NotebookEdit",
+        "MultiEdit",
+        "WebSearch",
+        "SlashCommand",
+        "mcp__github__pushFiles",
+        "mcp__x__showDiff",
+        "mcp__x__refreshCache",
+        "mcp__x__publishRelease",
+        "mcp__x__Dashboard",
+        "Read(a, pushFiles)",
+        "Read(src/myShell.ts)",
+    ],
+)
+def test_camel_case_names_without_a_shell_word_still_allow(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
