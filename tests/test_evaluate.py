@@ -271,6 +271,16 @@ def test_unknown_top_level_key_is_invalid() -> None:
     assert DenyReason.ENVELOPE_INVALID in decision.reasons
 
 
+def test_operation_is_accepted_and_an_unknown_key_is_still_refused() -> None:
+    """update_policy reads operation, so a valid operation is a known envelope key."""
+    accepted = evaluate(_ok_envelope(operation="install"), PIN)
+    assert accepted.verdict is Verdict.ALLOW
+    assert DenyReason.ENVELOPE_INVALID not in accepted.reasons
+    refused = evaluate(_ok_envelope(note="hello"), PIN)
+    assert refused.verdict is Verdict.DENY
+    assert DenyReason.ENVELOPE_INVALID in refused.reasons
+
+
 def test_non_string_top_level_key_is_invalid() -> None:
     raw = _ok_envelope()
     raw[1] = "x"  # type: ignore[index]
