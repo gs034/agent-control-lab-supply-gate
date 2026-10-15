@@ -1,0 +1,42 @@
+{
+  "audit_id": "2026-10-15-gate",
+  "commit": "6bc106b5e66b85f8c1ac1cfa1e24f92ff738a372",
+  "files": {
+    "harness/mutation_activation.py": "sha256:9f704fb1adeae4a35a3ade2852b6de3b3d11c839bff94d4ae4df3a4776da5e3d",
+    "harness/mutation_audit.py": "sha256:f41c517afd44c30a4795ec641a4326296b2fc2aef7f7cf77a038f8fb1e773c16",
+    "pyproject.toml": "sha256:b30c404051c390c56c5eaa0035e2ef121a93960c7a65980cd11bcfbb00942dd2",
+    "tests/test_adapters.py": "sha256:237edd2479721488f861258052f6addd1fbddc5c4cdb83d63de568cd8a42dee3",
+    "tests/test_allowlist.py": "sha256:f80122cf3eb14487a978218d483f5d4dd7e6727ede3e600a4072ed54e96aa91f",
+    "tests/test_demo.py": "sha256:a4b97d172d32dbd62a025a0133eda4454a35b8957b9d6b277962df6800c8186f",
+    "tests/test_eval_rows.py": "sha256:006c6675cd1e3eaa371a35ed90ca61104ab2327179f45e2bfca730840b328e3f",
+    "tests/test_evaluate.py": "sha256:4e3126965ba2d070b9efcabeb5cd6acbe27f921a932faeba430fd8f47843ada7",
+    "tests/test_lab_brand_wall.py": "sha256:f8ff0185a58e58564ad6f60d2f161d52ee1af0440feb4d5224c2275e2ed78aa6",
+    "tests/test_manifest.py": "sha256:b37440c75e237ed0619e279658dd63aeaa613e4b0149cb966f5a67168f916478",
+    "tests/test_mutation_audit.py": "sha256:62d0903bba0065c7bdeeb974f96e971b4f8337af66bf8eca5b76b6bdeca1939a",
+    "tests/test_update_policy.py": "sha256:eec65cac96e9b07e0b20020b158adafdd878ff42f1b2338826249842d62b752f"
+  },
+  "mutants": {
+    "mutants/M01.patch": "sha256:3c61b2e57c38df7d984dd4d7aca8d20b4d6732ad7a413757018d45bfdb6d3e41",
+    "mutants/M02.patch": "sha256:42259b800067e8c24d4c712150112ec40ede6e64590070765a1c96533e5dd096",
+    "mutants/M03.patch": "sha256:1cb2f62306f55fe45c478ed7c30680fa06e07f5cf93e24d865a9b840cd444a93",
+    "mutants/M04.patch": "sha256:c9aaec85a292a03d58a5361c29e69cd44b0af6b47ce6a74e76cb51f3b0881fbe",
+    "mutants/M05.patch": "sha256:fdb25c62758481b32a9fe564a5ecb0512f5cd103395fa7d732793c69b93136e5",
+    "mutants/M06.patch": "sha256:1eee57bf4af1fbc2af716c390ddf993c1b7527cd8379a4c857bd67194762695c",
+    "mutants/M07.patch": "sha256:e5f6d7c99b5ebd47b039930be51c1b910915235d7ba57da32ce7313a75ad9ea9",
+    "mutants/M08.patch": "sha256:032959b0835de0a7132d9561fb10649cfe3ab83a9eaabbe1362f4cedd5dccd4e",
+    "mutants/M09.patch": "sha256:4741971fda8ada17df03e97e3ee76032e1906bb15f1ce8ece9b8111ec2b95aec",
+    "mutants/M10.patch": "sha256:396ce5dc1ae6062133070917fb83f96093562b5a08eb81adcd35d3eae96eb205",
+    "mutants/M11.patch": "sha256:e13c1e8744c62a6a4c697834256ed36bb7617ed1660547709c15f15c09ed6539",
+    "mutants/M12.patch": "sha256:698285541fa9223330705012b8930994c9790d4f1aebbfe99548ff766ac48671"
+  },
+  "package": "supply_gate",
+  "python": "3.13.16",
+  "repair_of": null,
+  "reviewer": "same-family",
+  "scope": [
+    "supply_gate/gate.py",
+    "supply_gate/manifest.py",
+    "supply_gate/update_policy.py"
+  ],
+  "timeout_seconds": 300.0
+}

@@ -1,0 +1,13 @@
+Intent: the kill switch only adds KILL_ACTIVE when the envelope is already invalid, so a valid envelope ignores kill.
+Property: an active kill switch (explicit or ACL_SUPPLY_GATE_KILL) must DENY every evaluation, whatever the envelope contains.
+--- a/supply_gate/gate.py
++++ b/supply_gate/gate.py
+@@ -74,7 +74,7 @@ def evaluate(
+     reasons: list[DenyReason] = []
+     if parsed is None:
+         reasons.append(DenyReason.ENVELOPE_INVALID)
+-    if kill:
++    if kill and parsed is None:
+         reasons.append(DenyReason.KILL_ACTIVE)
+     if skip_attempt:
+         # Untrusted structured waive is rejected. Prose text is never a skip;
