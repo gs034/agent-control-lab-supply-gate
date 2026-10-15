@@ -16,6 +16,10 @@ from supply_gate.reasons import REASON_ORDER, DenyReason, Verdict
 from supply_gate.receipt import build_receipt
 
 KILL_ENV = "ACL_SUPPLY_GATE_KILL"
+# Kill switch spellings, compared after strip() and lower(). A non-empty value
+# in neither set is treated as killed (fail closed); see kill_value_active.
+KILL_TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "on"})
+KILL_FALSE_VALUES = frozenset({"", "0", "false", "f", "no", "n", "off"})
 
 
 @dataclass(frozen=True)
@@ -34,7 +38,7 @@ def evaluate(
     observed_head: str | None,
     *,
     allowed_origins: frozenset[str] | None = None,
-    kill_active: bool | None = None,
+    kill_active: bool | str | None = None,
     untrusted_prose: str | None = None,
     extra_reasons: tuple[DenyReason, ...] = (),
     observed_hooks: Mapping[str, str] | None = None,
@@ -163,13 +167,35 @@ def _resolve_allowed_origins(
         return frozenset(), False
 
 
-def _kill_active(explicit: bool | None) -> bool:
-    if explicit is True:
-        return True
-    if explicit is False:
+def kill_value_active(value: object) -> bool:
+    """Read a kill switch value, failing closed.
+
+    ``True`` / ``False`` and ``None`` (unset) mean what they say. A string is
+    trimmed and compared case-insensitively: ``KILL_TRUE_VALUES`` is killed,
+    ``KILL_FALSE_VALUES`` (including empty, which is how an unset variable
+    reads) is not. Any other value, such as a typo (``ture``), a word this
+    gate does not know (``enabled``), or a number other than 0 and 1, is
+    treated as killed. A kill switch exists to stop installs; an operator who
+    sets it with an unexpected spelling meant to turn it on, so ignoring the
+    value would fail open.
+    """
+    if value is None:
         return False
-    flag = os.environ.get(KILL_ENV, "")
-    return flag.strip() in {"1", "true", "TRUE", "yes", "YES"}
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        flag = value.strip().lower()
+        # KILL_TRUE_VALUES and any unrecognised value are both killed.
+        return flag in KILL_TRUE_VALUES or flag not in KILL_FALSE_VALUES
+    return True
+
+
+def _kill_active(explicit: object) -> bool:
+    if explicit is not None:
+        return kill_value_active(explicit)
+    return kill_value_active(os.environ.get(KILL_ENV))
 
 
 def _normalize_head(observed_head: str | None) -> str | None:

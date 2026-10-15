@@ -138,7 +138,7 @@ def gated_install_or_update(
     allowlist: AllowlistConfig | None = None,
     allowlist_path: str | Path | None = None,
     untrusted_prose: str | None = None,
-    kill_active: bool | None = None,
+    kill_active: bool | str | None = None,
     use_env: bool = True,
 ) -> Decision:
     """Host path: load host config → fail-closed update policy → materialise → evaluate.

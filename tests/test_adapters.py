@@ -262,3 +262,26 @@ def test_gated_path_kill_env_still_denies_when_use_env(
     )
     assert decision.verdict is Verdict.DENY
     assert DenyReason.KILL_ACTIVE in decision.reasons
+
+
+@pytest.mark.parametrize("value", ["on", "True", " y ", "enabled"])
+def test_gated_path_kill_config_value_spellings_deny(value: str) -> None:
+    """S-5: a kill_active config value on the adapter path is read fail closed."""
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy=UpdatePolicy.fail_closed_default(),
+        kill_active=value,  # type: ignore[arg-type]
+        use_env=False,
+    )
+    assert decision.reasons == (DenyReason.KILL_ACTIVE,)
+
+
+def test_gated_path_kill_env_truthy_spelling_denies(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", " On ")
+    decision = gated_install_or_update(
+        _ok_envelope(),
+        RecordingStubAdapter(PIN),
+        update_policy=UpdatePolicy.fail_closed_default(),
+    )
+    assert decision.reasons == (DenyReason.KILL_ACTIVE,)

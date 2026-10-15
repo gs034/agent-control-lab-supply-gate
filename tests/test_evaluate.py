@@ -172,3 +172,47 @@ def test_naive_pin_alone_is_not_sufficient() -> None:
     decision = evaluate(envelope, SWAPPED)
     assert decision.verdict is Verdict.DENY
     assert DenyReason.HEAD_MISMATCH in decision.reasons
+
+
+@pytest.mark.parametrize("value", ["1", "true", "True", "TRUE", "t", "yes", "YES", "y", "Y", "on", "ON", " 1 ", "\tyes\n"])
+def test_kill_env_truthy_spellings_deny(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """S-5: the kill env is trimmed and compared case-insensitively."""
+    monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", value)
+    decision = evaluate(_ok_envelope(), PIN)
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.KILL_ACTIVE,)
+    assert decision.receipt["kill_active"] is True
+
+
+@pytest.mark.parametrize("value", ["ture", "enabled", "2", "kill", "-1", "yes please"])
+def test_kill_env_unrecognised_value_fails_closed(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """S-5: an unrecognised non-empty kill value is treated as killed, not ignored."""
+    monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", value)
+    decision = evaluate(_ok_envelope(), PIN)
+    assert decision.reasons == (DenyReason.KILL_ACTIVE,)
+
+
+@pytest.mark.parametrize("value", ["", "   ", "0", "false", "False", "f", "no", "NO", "n", "off", " Off "])
+def test_kill_env_falsy_spellings_leave_kill_off(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", value)
+    decision = evaluate(_ok_envelope(), PIN)
+    assert decision.verdict is Verdict.ALLOW
+    assert decision.receipt["kill_active"] is False
+
+
+@pytest.mark.parametrize("value", ["True", "on", "y", "YES", " 1 ", "enabled", 1, 2])
+def test_kill_active_config_value_truthy_or_unrecognised_denies(
+    monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    """S-5: an explicit kill_active config value is read the same way as the env."""
+    monkeypatch.delenv("ACL_SUPPLY_GATE_KILL", raising=False)
+    decision = evaluate(_ok_envelope(), PIN, kill_active=value)  # type: ignore[arg-type]
+    assert decision.reasons == (DenyReason.KILL_ACTIVE,)
+    assert decision.receipt["kill_active"] is True
+
+
+@pytest.mark.parametrize("value", ["off", "false", "0", 0, False])
+def test_kill_active_config_value_falsy_overrides_env(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", "1")
+    decision = evaluate(_ok_envelope(), PIN, kill_active=value)  # type: ignore[arg-type]
+    assert decision.verdict is Verdict.ALLOW

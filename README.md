@@ -71,7 +71,7 @@ Host allowlist config: explicit set, JSON/text file, or `ACL_SUPPLY_GATE_ALLOWLI
 
 Additional existence-proof rows (adapter path; official demo unchanged): DENY `eval/omitted_adapter_head/`, `eval/unreadable_allowlist/`, `eval/trust_ref_rejected/`, `eval/auto_latest_rejected/`, `eval/prose_waive_attempt/`, and the v0.4 manifest rows `eval/mcp_server_unpinned/`, `eval/skill_shell_preapproved/`, `eval/hook_update_unverified/` (pin and HEAD match in all three; the manifest alone is the deny). Real-shape rows `eval/mcp_server_real_shape/`, `eval/skill_shell_real_shape/`, and `eval/hook_real_shape/` use the same three deny reasons. ALLOW `eval/allow_pin_and_verify/` still cannot skip HEAD verify.
 
-Kill: pass `kill_active=True` or set `ACL_SUPPLY_GATE_KILL=1`. Gate faults via `safe_evaluate` also DENY.
+Kill: pass `kill_active=True` or set `ACL_SUPPLY_GATE_KILL=1`. The env value and a string `kill_active` value are trimmed and compared case-insensitively: `1`, `true`, `t`, `yes`, `y`, `on` turn kill on; empty (or unset), `0`, `false`, `f`, `no`, `n`, `off` leave it off. Any other non-empty value (a typo such as `ture`, or a word such as `enabled`) is treated as kill on, and so is an integer other than 0. The kill switch exists to stop installs, so a value the gate cannot read fails closed rather than being ignored. Gate faults via `safe_evaluate` also DENY.
 
 ## Host path (not a model)
 
