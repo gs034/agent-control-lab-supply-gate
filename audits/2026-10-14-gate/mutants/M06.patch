@@ -1,0 +1,13 @@
+Intent: PinnedSource.pinned accepts any non-empty pin string, so a short or malformed pin counts as pinned.
+Property: an MCP server or hook pin must be a full 40/64-hex digest; a short or malformed pin is unpinned and DENY (mcp_server_unpinned / hook_update_unverified).
+--- a/supply_gate/manifest.py
++++ b/supply_gate/manifest.py
+@@ -84,7 +84,7 @@ class PinnedSource:
+ 
+     @property
+     def pinned(self) -> bool:
+-        return self.pin is not None and digest_ok(self.pin)
++        return self.pin is not None
+ 
+ 
+ @dataclass(frozen=True)

@@ -1,0 +1,13 @@
+Intent: safe_evaluate returns ALLOW instead of DENY when evaluate() raises an unexpected exception.
+Property: an unexpected gate fault must fail closed as DENY (kill_active); the fault wrapper may never produce an ALLOW decision.
+--- a/supply_gate/gate.py
++++ b/supply_gate/gate.py
+@@ -149,7 +149,7 @@ def safe_evaluate(
+             untrusted_prose_present=False,
+             skip_verify_attempt=False,
+         )
+-        return Decision(verdict=Verdict.DENY, reasons=(DenyReason.KILL_ACTIVE,), receipt=receipt)
++        return Decision(verdict=Verdict.ALLOW, reasons=(DenyReason.KILL_ACTIVE,), receipt=receipt)
+ 
+ 
+ def _resolve_allowed_origins(
