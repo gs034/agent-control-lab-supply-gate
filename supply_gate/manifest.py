@@ -49,7 +49,10 @@ _SHELL_WORDS = re.compile(
 # eval, su, and the launch words below are denied as heads and as argument
 # tokens only when the whole token, or the whole last path segment, is that
 # word. A ``:`` suffix is stripped first (``eval:*``, ``sudo:*``). A
-# ``.exe``, ``.cmd``, ``.bat``, ``.ps1`` or ``.com`` spelling counts.
+# ``.exe``, ``.cmd``, ``.bat``, ``.ps1`` or ``.com`` spelling counts only when
+# the stem is exactly the shell word (``bash.cmd``, not ``run.cmd`` or
+# ``build.bat``). A leading hyphen is a whole token (``-su``), not a path
+# segment (``docs/-su``).
 # ``_`` and ``-`` stay inside the name, so eval_runner, run_eval,
 # mcp__lab__eval and su-docs are not grants. A longer file name (.env,
 # eval.py, sudo_helper.py), a middle path segment (src/env/config.py,
@@ -81,11 +84,14 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # ``=``, ``+`` and backslash. Whitespace is included because the top-level
 # rule split cuts on whitespace, and a host that ignores parentheses would
 # apply that cut inside the argument.
-# A piece that is a bare tool name, a launcher suffix (``.exe``, ``.cmd``,
-# ``.bat``, ``.ps1``, ``.com``), a hyphen-suffix variant, or a colon-suffix
-# variant (``bash.exe``, ``bash.cmd``, ``bash.ps1``, ``sh.com``, ``bash-x``,
-# ``bash:*``, ``bash:ls``) is judged with the same shell-word match as a
-# head. ``eval``, ``su``, ``env``, ``sudo``, ``doas``, ``xargs`` and
+# A piece that is a bare tool name, a launcher suffix whose stem is exactly
+# a shell word (``.exe``, ``.cmd``, ``.bat``, ``.ps1``, ``.com`` on
+# ``bash.cmd`` or ``sh.bat``, not on ``run.cmd`` or ``build.bat``), a
+# hyphen-suffix variant, or a colon-suffix variant (``bash.exe``,
+# ``bash.ps1``, ``sh.com``, ``bash-x``, ``bash:*``, ``bash:ls``) is judged
+# with the same shell-word match as a head. A leading hyphen is the whole
+# token (``-su``), so ``docs/-su`` is not a grant. ``eval``, ``su``, ``env``,
+# ``sudo``, ``doas``, ``xargs`` and
 # ``nohup`` match only as a whole token or as the whole last path segment,
 # as heads and inside arguments, after a ``:`` suffix is removed
 # (``eval:*``, ``sudo:*``). A glob or punctuation mark glued straight onto
@@ -451,14 +457,15 @@ def _exact_shell_word(name: str) -> bool:
     return matched is not None and matched.group("tail") == ""
 
 
-def _stuck_on_shell(name: str) -> bool:
+def _stuck_on_shell(name: str, *, hyphen: bool = True) -> bool:
     """True when a glob or punctuation mark is glued onto a leading shell word.
 
     Leading hyphens on a whole shell word (``-bash``, ``-su``, ``--eval``)
-    count, and so does a shell word that ends in a bare dot (``bash.``). A
-    dotted file name such as ``cmd.txt`` does not.
+    count when ``hyphen`` is set. A path segment such as ``docs/-su`` does
+    not. A shell word that ends in a bare dot (``bash.``) counts. A dotted
+    file name such as ``cmd.txt`` does not.
     """
-    if name.startswith("-"):
+    if hyphen and name.startswith("-"):
         rest = name.lstrip("-")
         if rest and len(rest) < len(name) and (_whole_extra_shell(rest) or _exact_shell_word(rest)):
             return True
@@ -478,8 +485,9 @@ def _argument_names_shell(reading: str) -> bool:
     backticks, ``&``, ``>``, ``<``, braces, brackets, ``!``, ``#``, ``=``,
     ``+`` and backslash. A ``.exe`` spelling, a hyphen-suffix spelling, a
     colon-suffix spelling (``bash:*``, ``bash:ls``), a ``.cmd``, ``.bat``,
-    ``.ps1`` or ``.com`` launcher (``bash.cmd``, ``sh.bat``, ``bash.ps1``,
-    ``sh.com``), and a glob or punctuation mark glued onto a shell word
+    ``.ps1`` or ``.com`` launcher whose stem is exactly a shell word
+    (``bash.cmd``, ``sh.bat``, ``bash.ps1``, ``sh.com``; not ``run.cmd`` or
+    ``build.bat``), and a glob or punctuation mark glued onto a shell word
     (``bash*``, ``bash?``, ``bash/*``, ``bash=*``, ``bash^``, ``bash.``,
     ``-bash``, ``-su``, ``--eval``) count as tool names. ``eval``, ``su``,
     ``env``, ``sudo``, ``doas``, ``xargs`` and ``nohup`` match only when the
@@ -494,18 +502,34 @@ def _argument_names_shell(reading: str) -> bool:
     return False
 
 
+def _exact_launcher_shell(name: str) -> bool:
+    """True when ``name`` is exactly a shell word plus one launcher suffix."""
+    base = name.split(":", 1)[0]
+    for suffix in _LAUNCHER_SUFFIXES:
+        if not base.endswith(suffix) or len(base) <= len(suffix):
+            continue
+        stem = base[: -len(suffix)]
+        return _exact_shell_word(stem) or stem in _EXTRA_SHELL_WORDS
+    return False
+
+
 def _argument_word_is_shell(name: str) -> bool:
     """True when an argument token names a shell, including eval, su, env and sudo."""
+    if "/" in name:
+        return False
     if _whole_extra_shell(name):
         return True
+    if any(name.split(":", 1)[0].endswith(suffix) for suffix in _LAUNCHER_SUFFIXES):
+        return _exact_launcher_shell(name)
     return bool(_ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name))
 
 
-def _token_names_shell(name: str) -> bool:
+def _token_names_shell(name: str, *, path_segment: bool = False) -> bool:
     """True when ``name``, or the last segment of a ``/`` path, is shell-class."""
     if not name:
         return False
-    if _stuck_on_shell(name) or _argument_word_is_shell(name):
+    # A leading hyphen is a whole token (``-su``), not a path segment (``docs/-su``).
+    if _stuck_on_shell(name, hyphen=not path_segment) or _argument_word_is_shell(name):
         return True
     if "/" not in name:
         return False
@@ -520,7 +544,7 @@ def _token_names_shell(name: str) -> bool:
     # A general shell word in the directory slot (``/bin/sh/``, ``sh/``) is.
     if name.endswith("/"):
         return _exact_shell_word(segment)
-    return _token_names_shell(segment)
+    return _token_names_shell(segment, path_segment=True)
 
 
 def _strip_invisible(text: str, replacement: str) -> str:

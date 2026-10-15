@@ -765,6 +765,9 @@ def test_eval_su_env_and_sudo_whole_words_are_denied(value: str) -> None:
         "Read(src/eval/)",
         "Read(a, src/env/)",
         "Read(a, src/eval/)",
+        "Read(scripts/run.cmd)",
+        "build.bat",
+        "docs/-su",
     ],
 )
 def test_shell_word_inside_a_longer_path_stays_allowed(value: str) -> None:
@@ -808,6 +811,8 @@ def test_shell_word_inside_a_longer_path_stays_allowed(value: str) -> None:
         "Read(=bash)",
         "Read(--exec=bash)",
         "Read(a+bash)",
+        "/usr/bin/doas",
+        "xargs.exe",
     ],
 )
 def test_more_argument_marks_and_launch_words_are_denied(value: str) -> None:
