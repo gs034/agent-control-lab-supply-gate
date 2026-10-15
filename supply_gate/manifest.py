@@ -46,10 +46,28 @@ _SHELL_WORDS = re.compile(
     r"|ash|dash|fish|ksh|csh|tcsh|busybox"
     r")(?P<tail>[^a-z]|$)"
 )
+# eval, su, and the launch words below are denied as heads and as argument
+# tokens only when the whole token, or the whole last path segment, is that
+# word. A ``:`` suffix is stripped first (``eval:*``, ``sudo:*``). A
+# ``.exe``, ``.cmd``, ``.bat``, ``.ps1`` or ``.com`` spelling counts only when
+# the stem is exactly the shell word (``bash.cmd``, not ``run.cmd`` or
+# ``build.bat``). A leading hyphen is a whole token (``-su``), not a path
+# segment (``docs/-su``).
+# ``_`` and ``-`` stay inside the name, so eval_runner, run_eval,
+# mcp__lab__eval and su-docs are not grants. A longer file name (.env,
+# eval.py, sudo_helper.py), a middle path segment (src/env/config.py,
+# docs/su/x), and a directory token whose launch word is not the last
+# segment (eval/, src/env/, src/eval/) are not that word either.
+_ARGUMENT_LAUNCH_WORDS = frozenset({"env", "sudo", "doas", "xargs", "nohup"})
+_EXTRA_SHELL_WORDS = frozenset({"eval", "su"}) | _ARGUMENT_LAUNCH_WORDS
+_LAUNCHER_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1", ".com")
 # A glob or one of these marks glued straight onto a shell word (``bash*``,
-# ``bash?``, ``bash/*``, ``bash=*``). A dot stays out of this set so a file
-# name such as ``cmd.txt`` is not a tool spelling.
-_STUCK_MARKS = frozenset({"*", "?", "/", "="})
+# ``bash?``, ``bash/*``, ``bash=*``, ``bash^``, ``bash~``, ``bash%``,
+# ``bash+x``). A dot stays out of this set so a file name such as ``cmd.txt``
+# is not a tool spelling; a shell word that is only a trailing dot (``bash.``)
+# is handled beside this set, as is a leading hyphen (``-bash``, ``-su``,
+# ``--eval``).
+_STUCK_MARKS = frozenset({"*", "?", "/", "=", "^", "~", "%", "+"})
 # A bare wildcard head grants everything. A glob character anywhere in a head
 # (``Ba*``, ``B?sh``, ``*ash``) may match a shell-class tool on the host that
 # expands it, so it is treated as a possible shell grant and denied.
@@ -61,32 +79,84 @@ _INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0})
 _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # A host that splits a rule string without tracking parentheses can read a word
 # inside an argument as a rule of its own (``Read(a, Bash)``, ``Read(a Bash)``).
-# The argument is cut on commas, parentheses, whitespace, ``;`` and ``|``.
-# Whitespace is included because the top-level rule split cuts on whitespace,
-# and a host that ignores parentheses would apply that cut inside the argument.
-# A piece that is a bare tool name, a ``.exe`` variant, a hyphen-suffix
-# variant, or a colon-suffix variant (``bash.exe``, ``bash-x``, ``bash:*``,
-# ``bash:ls``) is judged with the same shell-word match as a head. A glob or
-# punctuation mark glued straight onto that word (``bash*``, ``bash?``,
-# ``bash/*``, ``bash=*``) is judged the same way a rule head ``bash*`` is.
-# A normal path and a ``domain:`` rule stay argument syntax
-# (``notes/bash/*``, ``scripts/**/*.sh``, ``domain:sh.example``), as does a
-# dotted name that is not a ``.exe`` variant (``Write(cmd.txt)``).
-# camelCase / PascalCase and letter/digit boundaries. Matching is on lowercase
-# text, so without this split ``mcp__x__runCommand`` reads as ``runcommand``
-# and ``execShell`` as ``execshell``, neither of which is a whole shell word.
-# The split reading is judged in addition to the plain one, for heads and for
-# argument tokens alike.
+# The argument is cut on commas, parentheses, whitespace, ``;``, ``|``,
+# quotes, backticks, ``&``, ``>``, ``<``, braces, brackets, ``!``, ``#``,
+# ``=``, ``+`` and backslash. Whitespace is included because the top-level
+# rule split cuts on whitespace, and a host that ignores parentheses would
+# apply that cut inside the argument.
+# A piece that is a bare tool name, a launcher suffix whose stem is exactly
+# a shell word (``.exe``, ``.cmd``, ``.bat``, ``.ps1``, ``.com`` on
+# ``bash.cmd`` or ``sh.bat``, not on ``run.cmd`` or ``build.bat``), a
+# hyphen-suffix variant, or a colon-suffix variant (``bash.exe``,
+# ``bash.ps1``, ``sh.com``, ``bash-x``, ``bash:*``, ``bash:ls``) is judged
+# with the same shell-word match as a head. A leading hyphen is the whole
+# token (``-su``), so ``docs/-su`` is not a grant. ``eval``, ``su``, ``env``,
+# ``sudo``, ``doas``, ``xargs`` and
+# ``nohup`` match only as a whole token or as the whole last path segment,
+# as heads and inside arguments, after a ``:`` suffix is removed
+# (``eval:*``, ``sudo:*``). A glob or punctuation mark glued straight onto
+# a shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``, ``bash^``,
+# ``bash~``, ``bash%``, ``bash+x``, ``bash.``, ``-bash``, ``-su``,
+# ``--eval``) is judged the same way a rule head ``bash*`` is. A token that
+# contains ``/`` is judged on its last path segment only. A trailing slash
+# leaves that segment empty, so a launch word earlier in the path
+# (``eval/``, ``src/env/``, ``src/eval/``) is not a grant, while a general
+# shell word in the directory slot still is (``/bin/sh/``). A normal path
+# whose last segment is not a shell word, and a ``domain:`` rule, stay
+# argument syntax (``notes/bash/*``, ``scripts/**/*.sh``,
+# ``domain:sh.example``, ``.env``, ``src/env/config.py``, ``docs/su/x``,
+# ``eval.py``), as does a dotted name that is not a launcher suffix
+# (``Write(cmd.txt)``).
+# camelCase / PascalCase and letter/digit boundaries. A camel part is a grant
+# when that whole part is a real launcher (``exec``, ``shell``, ``bash``,
+# ``run_command``). ``fish``, ``ksh`` and ``cmd`` are denied when they are the
+# last camel part, compared case-insensitively, so ``runCmd``, ``runCMD``,
+# ``mcp__x__runCmd``, ``startKsh`` and ``openFish`` are grants, while
+# ``CmdLine``, ``KshConfig`` and ``fishFinder`` are not. ``runCommand``,
+# ``execShell`` and ``HTTPShell`` are grants. ``evalCode`` and ``sudoRun``
+# read as ``eval_code`` and ``sudo_run``, which are not whole-token matches.
+# ``readBashHistory`` and ``terminalWidth`` are refused because ``bash`` and
+# ``terminal`` are whole camel parts that are real launchers.
 _CASE_BOUNDARY = re.compile(
     r"(?<=[a-z])(?=[A-Z])"
     r"|(?<=[A-Z])(?=[A-Z][a-z])"
     r"|(?<=[A-Za-z])(?=[0-9])"
     r"|(?<=[0-9])(?=[A-Za-z])"
 )
-_ARGUMENT_SPLIT = re.compile(r"[,();|\s]+")
-# An argument piece longer than this is not read as a tool name. It is judged
-# by the shell-word match alone, so any shell word inside it denies.
-_MAX_ARGUMENT_PIECE = 256
+# Shell words that count when they are a whole camel part. ``fish``, ``ksh``
+# and ``cmd`` stay in the general list, so a head that is only that word is
+# still denied. Inside a longer camel name they count only as the last part
+# (see ``_CAMEL_TAIL_SHELLS``), so ``fishFinder``, ``KshConfig`` and ``CmdLine``
+# stay allowed.
+_CAMEL_LAUNCHERS = frozenset(
+    {
+        "bash",
+        "sh",
+        "shell",
+        "exec",
+        "execute",
+        "powershell",
+        "pwsh",
+        "zsh",
+        "terminal",
+        "run_command",
+        "run-command",
+        "ash",
+        "dash",
+        "csh",
+        "tcsh",
+        "busybox",
+    }
+)
+# Denied when they are the last camel part. Comparison is case-insensitive,
+# so ``runCmd`` and ``runCMD`` are the same grant. An earlier part is not
+# enough: ``CmdLine``, ``KshConfig`` and ``fishFinder`` stay allowed.
+_CAMEL_TAIL_SHELLS = frozenset({"cmd", "ksh", "fish"})
+_ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\[\\]!#<=+\\\\\\s]+")
+# ``% ~ ^ * ?`` separate a shell word glued inside a token (``a%bash``,
+# ``a*bash``). On a path they are applied only to the last segment, so an
+# ordinary glob (``src/*.py``, ``tests/eval/*``, ``notes/bash/*``) stays a glob.
+_MARK_SPLIT = re.compile(r"[%~^*?]+")
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
@@ -98,6 +168,9 @@ _MCP_LAUNCH_FIELDS = ("args", "env", "cwd")
 # A ``source`` spelled as a URL (``scheme://``) names something fetched from a
 # remote host, which no local digest can pin.
 _URL_SCHEME = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+# An argument piece longer than this is not read as a tool name. It is judged
+# by the shell-word match alone, so any shell word inside it denies.
+_MAX_ARGUMENT_PIECE = 256
 _HOOK_STUB_KEYS = frozenset({"source", "pin", "name"})
 _HOOK_GROUP_KEYS = frozenset({"matcher", "hooks"})
 _HOOK_COMMAND_KEYS = frozenset(
@@ -404,17 +477,35 @@ def _is_shell_grant(item: str) -> bool:
     invalid: ManifestError | None = None
     # Fixed order, every reading judged: a shell grant in any reading wins over
     # an ill-formed one, so the deny reason does not depend on evaluation order.
-    # Case is folded only after the camelCase reading is taken, so a tool named
-    # runCommand or execShell is judged as run_command and exec_shell.
-    for stripped in (_strip_invisible(norm, " "), _strip_invisible(norm, "")):
-        for reading in (stripped.lower(), _split_case(stripped).lower()):
-            try:
-                if _reading_grants_shell(reading):
-                    return True
-            except ManifestError as exc:
-                invalid = invalid or exc
+    # The lowercase reading is unchanged. The camelCase reading denies a
+    # whole camel part that is a real launcher, so runCommand, execShell and
+    # HTTPShell are grants. It also denies cmd, ksh and fish when they are the
+    # last camel part, case-insensitively, so runCmd, runCMD, startKsh and
+    # openFish are grants, while fishFinder, KshConfig and CmdLine are not.
+    # A non-whitespace control character is also read as a space, so NUL cannot
+    # hide a shell word; if no reading is a shell grant the rule is ill-formed.
+    stripped_forms = [_strip_invisible(norm, " "), _strip_invisible(norm, "")]
+    if _has_nonspace_control(norm):
+        stripped_forms.append(_strip_invisible(_controls_to_space(norm), " "))
+    for stripped in stripped_forms:
+        reading_invalid: ManifestError | None = None
+        try:
+            if _reading_grants_shell(stripped.lower()):
+                return True
+        except ManifestError as exc:
+            reading_invalid = exc
+        try:
+            if _camel_text_names_launcher(stripped):
+                return True
+        except ManifestError as exc:
+            invalid = invalid or reading_invalid or exc
+        else:
+            if reading_invalid is not None:
+                invalid = invalid or reading_invalid
     if invalid is not None:
         raise invalid
+    if _has_nonspace_control(norm):
+        raise ManifestError("permissions rule text contains a control character")
     return False
 
 
@@ -423,13 +514,16 @@ def _reading_grants_shell(reading: str) -> bool:
         head = rule.split("(", 1)[0].strip()
         # A shell grant wins over an ill-formed head, so ``Bash=*`` is denied
         # the same way ``Bash*`` is, rather than failing the name check first.
-        if _stuck_on_shell(head):
+        if (
+            _stuck_on_shell(head)
+            or _whole_extra_shell(head)
+            or _token_names_shell(head)
+            or _mcp_server_wide(head)
+        ):
             return True
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
-            return True
-        if _mcp_server_wide(head):
             return True
     return _argument_names_shell(reading)
 
@@ -450,52 +544,199 @@ def _mcp_server_wide(name: str) -> bool:
     return len(parts) == 2 or not all(parts[1:])
 
 
-def _stuck_on_shell(name: str) -> bool:
-    """True when a glob or punctuation mark is glued onto a leading shell word."""
+def _has_nonspace_control(text: str) -> bool:
+    return any(unicodedata.category(char) == "Cc" and not char.isspace() for char in text)
+
+
+def _controls_to_space(text: str) -> str:
+    return "".join(
+        " " if unicodedata.category(char) == "Cc" and not char.isspace() else char for char in text
+    )
+
+
+def _normalize_dots(name: str) -> str:
+    """Collapse repeated dots and drop trailing dots before a launcher suffix check."""
+    collapsed = name
+    while ".." in collapsed:
+        collapsed = collapsed.replace("..", ".")
+    return collapsed.rstrip(".")
+
+
+def _launcher_stem(name: str) -> str:
+    for suffix in _LAUNCHER_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _whole_extra_shell(name: str) -> bool:
+    """True when the whole token is eval, su, or a launch word.
+
+    A ``:`` suffix is removed first (``eval:*``), then a launcher suffix.
+    Repeated and trailing dots are collapsed first (``bash..exe``, ``bash.exe.``).
+    """
+    base = _normalize_dots(name.split(":", 1)[0])
+    return _launcher_stem(base) in _EXTRA_SHELL_WORDS
+
+
+def _exact_shell_word(name: str) -> bool:
+    matched = _SHELL_WORDS.fullmatch(name)
+    return matched is not None and matched.group("tail") == ""
+
+
+def _stuck_on_shell(name: str, *, hyphen: bool = True) -> bool:
+    """True when a glob or punctuation mark is glued onto a leading shell word.
+
+    Leading hyphens on a whole shell word (``-bash``, ``-su``, ``--eval``)
+    count when ``hyphen`` is set. A path segment such as ``docs/-su`` does
+    not. A shell word that ends in a bare dot (``bash.``) counts. A dotted
+    file name such as ``cmd.txt`` does not.
+    """
+    if hyphen and name.startswith("-"):
+        rest = name.lstrip("-")
+        if rest and len(rest) < len(name) and (_whole_extra_shell(rest) or _exact_shell_word(rest)):
+            return True
     matched = _SHELL_WORDS.match(name)
     if matched is None or matched.start("word") != 0:
         return False
-    return matched.group("tail") in _STUCK_MARKS
+    tail = matched.group("tail")
+    if tail in _STUCK_MARKS:
+        return True
+    return tail == "." and matched.end() == len(name)
 
 
 def _argument_names_shell(reading: str) -> bool:
     """True when a tool name inside a rule's parentheses is shell-class.
 
-    Separators are commas, parentheses, whitespace, ``;`` and ``|``. A ``.exe``
-    spelling, a hyphen-suffix spelling, a colon-suffix spelling
-    (``bash:*``, ``bash:ls``), and a glob or punctuation mark glued onto a
-    shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``) count as tool names.
+    Separators are commas, parentheses, whitespace, ``;``, ``|``, quotes,
+    backticks, ``&``, ``>``, ``<``, braces, brackets, ``!``, ``#``, ``=``,
+    ``+`` and backslash. A ``.exe`` spelling, a hyphen-suffix spelling, a
+    colon-suffix spelling (``bash:*``, ``bash:ls``), a ``.cmd``, ``.bat``,
+    ``.ps1`` or ``.com`` launcher whose stem is exactly a shell word
+    (``bash.cmd``, ``sh.bat``, ``bash.ps1``, ``sh.com``; not ``run.cmd`` or
+    ``build.bat``), and a glob or punctuation mark glued onto a shell word
+    (``bash*``, ``bash?``, ``bash/*``, ``bash=*``, ``bash^``, ``bash.``,
+    ``-bash``, ``-su``, ``--eval``) count as tool names. ``eval``, ``su``,
+    ``env``, ``sudo``, ``doas``, ``xargs`` and ``nohup`` match only when the
+    whole token is that word, after a ``:`` suffix is removed. A token
+    containing ``/`` is judged on its last path segment. A trailing slash
+    leaves that segment empty, so ``src/env/`` and ``src/eval/`` are not
+    grants, while ``/bin/sh/`` still is.
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
         name = piece.strip()
-        if _stuck_on_shell(name) or _mcp_server_wide(name):
-            return True
         if len(name) > _MAX_ARGUMENT_PIECE:
-            if _SHELL_WORDS.search(name):
+            # Past the cap the piece is not a tool name. Any shell word in it denies.
+            if _SHELL_WORDS.search(name) or _mcp_server_wide(name):
                 return True
             continue
-        if _is_argument_tool_name(name) and _SHELL_WORDS.search(name):
+        if _mcp_server_wide(name) or _token_names_shell(name):
             return True
     return False
 
 
-# Character classes for the argument tool-name scanner below.
-_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_@")
-_COLON_GLOBS = frozenset("*?")
+def _split_case(text: str) -> str:
+    """Insert ``_`` at camelCase, PascalCase and letter/digit boundaries.
+
+    ``runCommand`` reads as ``run_Command``, ``HTTPShell`` as ``HTTP_Shell``
+    and ``x2bash`` as ``x_2_bash``. The separator is one the shell-word match
+    and the tool-name patterns already accept, so the split only adds word
+    boundaries; it never removes one. Words without an inner capital
+    (``Publish``, ``dashboard``) read the same as before. ``evalCode`` and
+    ``sudoRun`` read as ``eval_code`` and ``sudo_run``.
+    """
+    return _CASE_BOUNDARY.sub("_", text)
+
+
+def _camel_parts(text: str) -> list[str]:
+    """Camel parts, lowercased, also split on underscores already in the name."""
+    return [part.lower() for part in _split_case(text).split("_") if part]
+
+
+def _camel_text_names_launcher(text: str) -> bool:
+    """True when a head or argument token has a whole camel part that is a real launcher."""
+    for rule in _split_rules(text):
+        head, _, argument = rule.partition("(")
+        if _camel_token_is_launcher(head.strip()):
+            return True
+        if argument:
+            for piece in _ARGUMENT_SPLIT.split(argument):
+                if _camel_token_is_launcher(piece.strip()):
+                    return True
+    return False
+
+
+def _camel_token_is_launcher(token: str) -> bool:
+    """True when a whole camel part is a real launcher, or the last part is cmd, ksh or fish.
+
+    The last-part check is case-insensitive, so ``runCmd`` and ``runCMD`` are
+    grants and ``CmdLine`` is not. ``fishFinder`` and ``KshConfig`` are not
+    grants. ``runCommand`` is a grant because the adjacent parts form
+    ``run_command``. A dotted file name that is not a launcher suffix
+    (``myShell.ts``) is not a tool name.
+    """
+    if not token:
+        return False
+    if "/" in token:
+        token = token.rstrip("/").rsplit("/", 1)[-1]
+    if _MARK_SPLIT.search(token):
+        return any(_camel_token_is_launcher(piece) for piece in _MARK_SPLIT.split(token) if piece)
+    base = _normalize_dots(token.split(":", 1)[0])
+    if any(base.endswith(suffix) for suffix in _LAUNCHER_SUFFIXES):
+        base = _launcher_stem(base)
+    elif "." in base:
+        return False
+    parts = _camel_parts(base)
+    if parts and parts[-1].lower() in _CAMEL_TAIL_SHELLS:
+        return True
+    if any(part in _CAMEL_LAUNCHERS for part in parts):
+        return True
+    for left, right in zip(parts, parts[1:]):
+        if f"{left}_{right}" in _CAMEL_LAUNCHERS:
+            return True
+    return False
+
+
+def _exact_launcher_shell(name: str) -> bool:
+    """True when ``name`` is exactly a shell word plus one launcher suffix."""
+    base = _normalize_dots(name.split(":", 1)[0])
+    for suffix in _LAUNCHER_SUFFIXES:
+        if not base.endswith(suffix) or len(base) <= len(suffix):
+            continue
+        stem = base[: -len(suffix)]
+        return _exact_shell_word(stem) or stem in _EXTRA_SHELL_WORDS
+    return False
+
+
 # One pass, one state per character. The accepted language is the one the
-# earlier pattern ``[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*``
-# described: a name run (letters, digits, ``_``, ``@``, ``:``), then any mix of
-# a ``.exe`` suffix, a ``-`` name run, or a ``:`` suffix that may carry ``*`` or
-# ``?``. That pattern let ``:`` belong to the name run or start a suffix, which
-# backtracked exponentially on a near miss such as ``a-a:a-a:...!``. Here the
-# two readings are tracked as one state, so the cost is linear in the length.
+# pattern ``[a-z0-9_:@]+(?:\.(?:exe|cmd|bat|ps1|com)|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*``
+# described. That pattern let ``:`` belong to the name run or start a suffix,
+# which backtracked exponentially on a near miss such as ``a-a:a-a:...!``.
+# Both readings are one state, so the cost is linear in the length. ``.cmd``,
+# ``.bat``, ``.ps1`` and ``.com`` are extra suffix paths beside ``.exe``;
+# ``cmd`` and ``com`` share a first letter and still take one step each.
 #   name      in a name run
 #   name_or   in a name run, and the last ``:`` may also have started a suffix
 #   name_suffix  in a name run that may also be a ``:`` suffix
 #   colon     just after a ``:`` that can only start a suffix
 #   suffix    in a ``:`` suffix
 #   hyphen    just after ``-``
-#   dot1..3   inside ``.exe``; exe after it
+#   dot, dot_*  inside ``.exe``, ``.cmd``, ``.bat``, ``.ps1`` or ``.com``
+#   exe       after one of those suffixes
+_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_@")
+_COLON_GLOBS = frozenset("*?")
+_DOT_NEXT = {
+    "dot": {"e": "dot_e", "c": "dot_c", "b": "dot_b", "p": "dot_p"},
+    "dot_e": {"x": "dot_ex"},
+    "dot_ex": {"e": "exe"},
+    "dot_c": {"m": "dot_cm", "o": "dot_co"},
+    "dot_cm": {"d": "exe"},
+    "dot_co": {"m": "exe"},
+    "dot_b": {"a": "dot_ba"},
+    "dot_ba": {"t": "exe"},
+    "dot_p": {"s": "dot_ps"},
+    "dot_ps": {"1": "exe"},
+}
 _SCAN_ACCEPT = frozenset({"name", "name_or", "name_suffix", "suffix", "exe"})
 
 
@@ -505,17 +746,13 @@ def _scan_step(state: str, char: str) -> str | None:
         return "name" if is_name or char == ":" else None
     if state == "colon":
         return "suffix" if is_name or char in _COLON_GLOBS else None
-    if state == "dot1":
-        return "dot2" if char == "e" else None
-    if state == "dot2":
-        return "dot3" if char == "x" else None
-    if state == "dot3":
-        return "exe" if char == "e" else None
+    if state in _DOT_NEXT:
+        return _DOT_NEXT[state].get(char)
     # name, name_or, name_suffix, suffix and exe all end an item here.
     if char == "-":
         return "hyphen"
     if char == ".":
-        return "dot1"
+        return "dot"
     if state == "exe":
         return "colon" if char == ":" else None
     if state == "name":
@@ -535,7 +772,10 @@ def _scan_step(state: str, char: str) -> str | None:
 
 
 def _is_argument_tool_name(name: str) -> bool:
-    """True when ``name`` is a bare tool name or a ``.exe``, ``-`` or ``:`` suffix spelling of one."""
+    """True when ``name`` is a bare tool name or a launcher, ``-`` or ``:`` suffix spelling of one.
+
+    Launcher suffixes are ``.exe``, ``.cmd``, ``.bat``, ``.ps1`` and ``.com``.
+    """
     state: str | None = "start"
     for char in name:
         state = _scan_step(state, char)
@@ -544,16 +784,48 @@ def _is_argument_tool_name(name: str) -> bool:
     return state in _SCAN_ACCEPT
 
 
-def _split_case(text: str) -> str:
-    """Insert ``_`` at camelCase, PascalCase and letter/digit boundaries.
+def _argument_word_is_shell(name: str) -> bool:
+    """True when an argument token names a shell, including eval, su, env and sudo."""
+    if "/" in name:
+        return False
+    normalized = _normalize_dots(name)
+    if _whole_extra_shell(normalized):
+        return True
+    base = normalized.split(":", 1)[0]
+    if any(base.endswith(suffix) for suffix in _LAUNCHER_SUFFIXES):
+        return _exact_launcher_shell(normalized)
+    return bool(_is_argument_tool_name(normalized) and _SHELL_WORDS.search(normalized))
 
-    ``runCommand`` reads as ``run_Command``, ``HTTPShell`` as ``HTTP_Shell``
-    and ``x2bash`` as ``x_2_bash``. The separator is one the shell-word match
-    and the tool-name patterns already accept, so the split only adds word
-    boundaries; it never removes one. Words without an inner capital
-    (``Publish``, ``dashboard``) read the same as before.
-    """
-    return _CASE_BOUNDARY.sub("_", text)
+
+def _token_names_shell(name: str, *, path_segment: bool = False) -> bool:
+    """True when ``name``, or the last segment of a ``/`` path, is shell-class."""
+    if not name:
+        return False
+    # Marks are cut on this token. A path is judged on its last segment only,
+    # so ``src/*.py`` and ``notes/bash/*`` do not split the directory away.
+    if "/" not in name and _MARK_SPLIT.search(name):
+        return any(
+            _token_names_shell(piece, path_segment=path_segment)
+            for piece in _MARK_SPLIT.split(name)
+            if piece
+        )
+    # A leading hyphen is a whole token (``-su``), not a path segment (``docs/-su``).
+    if _stuck_on_shell(name, hyphen=not path_segment) or _argument_word_is_shell(name):
+        return True
+    if "/" not in name:
+        return False
+    trimmed = name.rstrip("/")
+    if not trimmed:
+        return False
+    segment = trimmed.rsplit("/", 1)[-1]
+    if not segment or segment == name:
+        return False
+    # A trailing slash makes the last segment empty. A launch word in an
+    # earlier segment (``eval/``, ``src/env/``, ``src/eval/``) is not judged.
+    # A general shell word in the directory slot (``/bin/sh/``, ``sh/``) is.
+    if name.endswith("/"):
+        return _exact_shell_word(segment)
+    return _token_names_shell(segment, path_segment=True)
 
 
 def _strip_invisible(text: str, replacement: str) -> str:
