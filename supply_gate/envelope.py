@@ -23,6 +23,7 @@ _ENVELOPE_KEYS = frozenset(
         "caller",
         "ref",
         "capability",
+        "operation",
         "manifest",
         "untrusted",
     }
