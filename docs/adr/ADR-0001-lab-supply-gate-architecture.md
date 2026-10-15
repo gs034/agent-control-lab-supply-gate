@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-18
 - Updated: 2026-09-21 (v0.3.1 / M1b corpus: recorded ALLOW + prose-waive DENY)
+- Updated: 2026-10-14 (v0.4 / v0.4.1 manifest classes recorded below; the decision above is unchanged)
 - Brand: Agent Control Lab
 - Licence: Apache-2.0
 - Plane: agent-supply integrity (host decision before install or update)
@@ -127,6 +128,16 @@ caller-supplied digest only. It does not fetch, run git, or read HEAD from
 the tree. A missing or remote-shaped worktree path is omitted HEAD
 (`verify_missing`). No live marketplace, no live git-host client, and no
 production UI are required or implied.
+
+## Manifest classes (v0.4, v0.4.1)
+
+Added 14 October 2026 to record what v0.4 and v0.4.1 changed; the architecture decision above is unchanged. The gate now also reads the declared artefact manifest, and reads it only to deny. Three DENY classes apply when the pin and the post-checkout HEAD match but the manifest fails:
+
+- `mcp_server_unpinned`: a declared MCP server without a full-digest pin, or whose adapter-observed digest is missing or differs.
+- `skill_shell_preapproved`: a manifest that pre-approves a shell-class tool, a bare wildcard or a glob-bearing rule head for itself.
+- `hook_update_unverified`: a declared lifecycle hook without a pin, or whose adapter-observed digest differs from it.
+
+v0.4.1 accepts client-config shapes (name-keyed MCP transports, a permissions object or string, a lifecycle-event hook map) with no new deny reasons; an unknown shape is `envelope_invalid`. Receipt schema v1 is unchanged with the three reason codes appended. Observed digests are caller-supplied like HEAD, and a manifest that omits its servers or hooks is outside what the gate can see; both are residuals (`docs/threat-model.md`, `docs/ROADMAP.md`).
 
 ## Fail-closed
 

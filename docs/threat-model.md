@@ -1,7 +1,7 @@
 # Agent-supply integrity threat model
 
 Public, short model for the **agent-supply integrity** plane in Agent Control Lab.
-This repository is a host-side, fail-closed **existence-proof gate** (v0.3.1 / M1b corpus). Brand: Agent Control Lab only.
+This repository is a host-side, fail-closed **existence-proof gate** (v0.4.1: M1b corpus plus the v0.4 manifest deny classes). Brand: Agent Control Lab only.
 
 Apache-2.0. See `LICENSE`.
 
@@ -61,19 +61,21 @@ In all three rows the artefact pin and post-checkout HEAD match; the manifest is
 
 ## Control taxonomy
 
-| Control | Rule | Fail-closed outcome |
-| --- | --- | --- |
-| Pin | `expected_sha` must be a full digest; short / missing / ill-typed pin is invalid | `envelope_invalid` → DENY |
-| Optional ref | `ref` may be present; it is not policy | never substitutes for HEAD |
-| Origin allowlist | exact string match only; empty/broken config is not allow-all | `origin_not_allowlisted` or `allowlist_invalid` → DENY |
-| Update policy | host config (file/env) must load; adapter path requires `pin_and_verify`; weak modes (`trust_ref`, `auto_latest`) rejected | `update_policy_rejected` → DENY |
-| Post-checkout HEAD verify | observed HEAD present, well-formed, and equal to the pin | `verify_missing` or `head_mismatch` → DENY |
-| Prose is data | listing/agent text is never policy | structured waive → `prose_rejected_as_policy`; verify still runs |
-| Declared MCP servers | every `manifest.mcp_servers` entry carries a full-digest pin and the adapter observed that digest for what will launch (`observed_mcp_servers`); tags, promises and remote servers are not pins | `mcp_server_unpinned` → DENY |
-| Declared permissions | a manifest cannot pre-approve shell-class tools (shells and shell-launch verbs, including aliases such as `dash`, `fish`, `ksh`, `pwsh`), a bare wildcard, or a rule head carrying `*` or `?` (`Ba*`, `B?sh`) for itself; other non-tool-name characters in a head fail as ill-formed (`envelope_invalid`). Matching is whole-word, digits included (`bash2`), so a namespace segment that is a shell word (`mcp__ash__x`) is also refused. Interpreter heads (`python`, `node`) are not treated as shells; that is a host policy question, open | `skill_shell_preapproved` → DENY |
-| Declared hooks | every `manifest.hooks` entry carries a full-digest pin and the adapter-observed hook digest equals it | `hook_update_unverified` → DENY |
-| Kill | host kill switch (`kill_active` or `ACL_SUPPLY_GATE_KILL`) | `kill_active` → DENY |
-| Fault wrapper | unexpected gate exception | `safe_evaluate` → DENY (`kill_active`) |
+Each row carries a status as of 14 October 2026. **mitigated**: a test or an `eval/` row shows the rule holds at this tip. **accepted residual**: a known gap, written down, accepted for this existence-proof gate. **unmitigated**: a gap the roadmap still owes work on. Work item codes (L3.1 host-side state binding, L3.6 tamper-evident host log, L3.8 persistent single-use grants, L3.10 kill reach into a running tool, L4.1 provider-executed tools, L4.2 alternate-path fixtures and counts, L4.5 a materialiser so HEAD and hook digests are not caller-supplied, L4.6 omission detection, L5 measured efficacy, L6 tagged release) name items in the owner's route-to-production plan, which is not in this repository; the code is the pointer, the phrase is the meaning.  A status is a statement about this tree, not an attack-success claim.
+
+| Control | Rule | Fail-closed outcome | Status (14 Oct 2026) |
+| --- | --- | --- | --- |
+| Pin | `expected_sha` must be a full digest; short / missing / ill-typed pin is invalid | `envelope_invalid` → DENY | mitigated |
+| Optional ref | `ref` may be present; it is not policy | never substitutes for HEAD | mitigated: a ref never substitutes for HEAD |
+| Origin allowlist | exact string match only; empty/broken config is not allow-all | `origin_not_allowlisted` or `allowlist_invalid` → DENY | mitigated |
+| Update policy | host config (file/env) must load; adapter path requires `pin_and_verify`; weak modes (`trust_ref`, `auto_latest`) rejected | `update_policy_rejected` → DENY | mitigated |
+| Post-checkout HEAD verify | observed HEAD present, well-formed, and equal to the pin | `verify_missing` or `head_mismatch` → DENY | mitigated for the comparison; **unmitigated** for the input, HEAD is caller-supplied until a materialiser exists (L4.5) |
+| Prose is data | listing/agent text is never policy | structured waive → `prose_rejected_as_policy`; verify still runs | mitigated |
+| Declared MCP servers | every `manifest.mcp_servers` entry carries a full-digest pin and the adapter observed that digest for what will launch (`observed_mcp_servers`); tags, promises and remote servers are not pins | `mcp_server_unpinned` → DENY | mitigated for the comparison; the observed MCP digest is caller-supplied like HEAD (**unmitigated**, L4.5); a manifest that omits its servers is **unmitigated** (omission detection, L4.6) |
+| Declared permissions | a manifest cannot pre-approve shell-class tools (shells and shell-launch verbs, including aliases such as `dash`, `fish`, `ksh`, `pwsh`), a bare wildcard, or a rule head carrying `*` or `?` (`Ba*`, `B?sh`) for itself; other non-tool-name characters in a head fail as ill-formed (`envelope_invalid`). Matching is whole-word, digits included (`bash2`), so a namespace segment that is a shell word (`mcp__ash__x`) is also refused. Interpreter heads (`python`, `node`) are not treated as shells; that is a host policy question, open | `skill_shell_preapproved` → DENY | mitigated for shells, aliases, wildcards and glob heads; hidden tools inside arguments, such as `Read(a, Bash)`, are still allowed on main until #19 with its follow-up #23 lands; interpreter heads are an open host-policy question, pinned as not shell-class by `tests/test_manifest.py::test_interpreter_heads_are_not_shell_class_here`, owner decision pending |
+| Declared hooks | every `manifest.hooks` entry carries a full-digest pin and the adapter-observed hook digest equals it | `hook_update_unverified` → DENY | mitigated for the comparison; the observed hook digest is caller-supplied like HEAD (**unmitigated**, L4.5); a manifest that omits its hooks is **unmitigated** (L4.6) |
+| Kill | host kill switch (`kill_active` or `ACL_SUPPLY_GATE_KILL`) | `kill_active` → DENY | mitigated |
+| Fault wrapper | unexpected gate exception | `safe_evaluate` → DENY (`kill_active`) | mitigated |
 
 ALLOW only when the envelope parses, origin is allowlisted, kill is off, update policy is accepted where required, observed HEAD is present, and that HEAD exactly matches the pin. Any other outcome is DENY with a deterministic host JSON receipt.
 
@@ -82,6 +84,8 @@ ALLOW only when the envelope parses, origin is allowlisted, kill is off, update 
 There is no path where untrusted prose installs without verify. If the caller omits `observed_head`, the gate returns DENY / `verify_missing`. If checkout HEAD has moved, the gate returns DENY / `head_mismatch` even when the advertised pin looks well-formed.
 
 ## Non-goals
+
+Each bullet is an accepted residual for this existence-proof gate. The bullet marked *Proposed wording* awaits the owner's decision.
 
 - Not an LLM, chain-of-thought, or transcript judge.
 - Not a production marketplace integration, live git-host adapter, or production UI.
