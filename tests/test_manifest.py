@@ -759,6 +759,12 @@ def test_eval_su_env_and_sudo_whole_words_are_denied(value: str) -> None:
         "eval/",
         "Read(eval/)",
         "Read(a, eval/)",
+        "src/env/",
+        "src/eval/",
+        "Read(src/env/)",
+        "Read(src/eval/)",
+        "Read(a, src/env/)",
+        "Read(a, src/eval/)",
     ],
 )
 def test_shell_word_inside_a_longer_path_stays_allowed(value: str) -> None:
@@ -791,6 +797,17 @@ def test_shell_word_inside_a_longer_path_stays_allowed(value: str) -> None:
         "--eval",
         "Read(a, -su)",
         "Read(a, --eval)",
+        "mcp__x__run(eval:*)",
+        "mcp__x__run(sudo:*)",
+        "mcp__x__run(xargs:*)",
+        "Read(su:*)",
+        "Read(env:*)",
+        "Read(nohup:*)",
+        "Read(bash.ps1)",
+        "Read(sh.com)",
+        "Read(=bash)",
+        "Read(--exec=bash)",
+        "Read(a+bash)",
     ],
 )
 def test_more_argument_marks_and_launch_words_are_denied(value: str) -> None:
