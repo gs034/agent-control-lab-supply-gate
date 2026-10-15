@@ -151,3 +151,11 @@ def test_load_from_example_file() -> None:
 def test_missing_file_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(UpdatePolicyError):
         load_update_policy(path=tmp_path / "missing.json", use_env=False)
+
+
+def test_s14_huge_integer_in_update_policy_file_is_update_policy_error(tmp_path: Path) -> None:
+    """Same int conversion limit as the S-14 allowlist case; the loader raises its own error."""
+    path = tmp_path / "policy.json"
+    path.write_text('{"mode": "pin_and_verify", "n": ' + "9" * 5000 + "}\n", encoding="utf-8")
+    with pytest.raises(UpdatePolicyError, match="ill-formed"):
+        load_update_policy(path=path, use_env=False)
