@@ -41,11 +41,15 @@ _KEY_ALIASES = {
 # Whole-word matching also denies a namespace segment that is a shell word
 # (mcp__ash__x, a.sh); that is the fail-closed side of the trade.
 _SHELL_WORDS = re.compile(
-    r"(?:^|[^a-z])(?:"
+    r"(?:^|[^a-z])(?P<word>"
     r"bash|sh|shell|exec|execute|cmd|powershell|pwsh|zsh|terminal|run_command|run-command"
     r"|ash|dash|fish|ksh|csh|tcsh|busybox"
-    r")(?:[^a-z]|$)"
+    r")(?P<tail>[^a-z]|$)"
 )
+# A glob or one of these marks glued straight onto a shell word (``bash*``,
+# ``bash?``, ``bash/*``, ``bash=*``). A dot stays out of this set so a file
+# name such as ``cmd.txt`` is not a tool spelling.
+_STUCK_MARKS = frozenset({"*", "?", "/", "="})
 # A bare wildcard head grants everything. A glob character anywhere in a head
 # (``Ba*``, ``B?sh``, ``*ash``) may match a shell-class tool on the host that
 # expands it, so it is treated as a possible shell grant and denied.
@@ -55,6 +59,32 @@ _GLOB_CHARACTERS = frozenset({"*", "?"})
 _INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0})
 # A rule head is a plain tool name: letters, digits and the punctuation tool names use.
 _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
+# A host that splits a rule string without tracking parentheses can read a word
+# inside an argument as a rule of its own (``Read(a, Bash)``, ``Read(a Bash)``).
+# The argument is cut on commas, parentheses, whitespace, ``;`` and ``|``.
+# Whitespace is included because the top-level rule split cuts on whitespace,
+# and a host that ignores parentheses would apply that cut inside the argument.
+# A piece that is a bare tool name, a ``.exe`` variant, a hyphen-suffix
+# variant, or a colon-suffix variant (``bash.exe``, ``bash-x``, ``bash:*``,
+# ``bash:ls``) is judged with the same shell-word match as a head. A glob or
+# punctuation mark glued straight onto that word (``bash*``, ``bash?``,
+# ``bash/*``, ``bash=*``) is judged the same way a rule head ``bash*`` is.
+# A normal path and a ``domain:`` rule stay argument syntax
+# (``notes/bash/*``, ``scripts/**/*.sh``, ``domain:sh.example``), as does a
+# dotted name that is not a ``.exe`` variant (``Write(cmd.txt)``).
+# camelCase / PascalCase and letter/digit boundaries. Matching is on lowercase
+# text, so without this split ``mcp__x__runCommand`` reads as ``runcommand``
+# and ``execShell`` as ``execshell``, neither of which is a whole shell word.
+# The split reading is judged in addition to the plain one, for heads and for
+# argument tokens alike.
+_CASE_BOUNDARY = re.compile(
+    r"(?<=[a-z])(?=[A-Z])"
+    r"|(?<=[A-Z])(?=[A-Z][a-z])"
+    r"|(?<=[A-Za-z])(?=[0-9])"
+    r"|(?<=[0-9])(?=[A-Za-z])"
+)
+_ARGUMENT_SPLIT = re.compile(r"[,();|\s]+")
+_ARGUMENT_TOOL_NAME = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
 _MCP_ENTRY_KEYS = frozenset(
     {"source", "pin", "name", "command", "args", "env", "cwd", "type", "url", "headers"}
 )
@@ -296,6 +326,11 @@ def _hook_command(entry: Mapping[str, Any]) -> PinnedSource:
     if source is None:
         raise ManifestError("hooks entry needs a source")
     # A hook runs its command, url or prompt; that string is the observation key.
+    # A hook carrying two different ones would be keyed by one while the host
+    # may run the other, so no observation can vouch for it.
+    runs = {value for value in (command, url, prompt) if value is not None}
+    if len(runs) > 1:
+        raise ManifestError("hooks entry names more than one distinct command, url or prompt")
     launch = command or url or prompt or ""
     return PinnedSource(source=source, pin=_pin_value(entry), launch=launch)
 
@@ -347,16 +382,19 @@ def _is_shell_grant(item: str) -> bool:
     An invisible format character may be dropped by one host and read as a
     separator by another, so both readings are judged and either one denies.
     """
-    norm = unicodedata.normalize("NFKC", item).lower()
+    norm = unicodedata.normalize("NFKC", item)
     invalid: ManifestError | None = None
     # Fixed order, every reading judged: a shell grant in any reading wins over
     # an ill-formed one, so the deny reason does not depend on evaluation order.
-    for reading in (_strip_invisible(norm, " "), _strip_invisible(norm, "")):
-        try:
-            if _reading_grants_shell(reading):
-                return True
-        except ManifestError as exc:
-            invalid = invalid or exc
+    # Case is folded only after the camelCase reading is taken, so a tool named
+    # runCommand or execShell is judged as run_command and exec_shell.
+    for stripped in (_strip_invisible(norm, " "), _strip_invisible(norm, "")):
+        for reading in (stripped.lower(), _split_case(stripped).lower()):
+            try:
+                if _reading_grants_shell(reading):
+                    return True
+            except ManifestError as exc:
+                invalid = invalid or exc
     if invalid is not None:
         raise invalid
     return False
@@ -365,11 +403,52 @@ def _is_shell_grant(item: str) -> bool:
 def _reading_grants_shell(reading: str) -> bool:
     for rule in _split_rules(reading):
         head = rule.split("(", 1)[0].strip()
+        # A shell grant wins over an ill-formed head, so ``Bash=*`` is denied
+        # the same way ``Bash*`` is, rather than failing the name check first.
+        if _stuck_on_shell(head):
+            return True
         if not _RULE_HEAD.fullmatch(head):
             raise ManifestError("permissions rule name is not a plain tool name")
         if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
             return True
+    return _argument_names_shell(reading)
+
+
+def _stuck_on_shell(name: str) -> bool:
+    """True when a glob or punctuation mark is glued onto a leading shell word."""
+    matched = _SHELL_WORDS.match(name)
+    if matched is None or matched.start("word") != 0:
+        return False
+    return matched.group("tail") in _STUCK_MARKS
+
+
+def _argument_names_shell(reading: str) -> bool:
+    """True when a tool name inside a rule's parentheses is shell-class.
+
+    Separators are commas, parentheses, whitespace, ``;`` and ``|``. A ``.exe``
+    spelling, a hyphen-suffix spelling, a colon-suffix spelling
+    (``bash:*``, ``bash:ls``), and a glob or punctuation mark glued onto a
+    shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``) count as tool names.
+    """
+    for piece in _ARGUMENT_SPLIT.split(reading):
+        name = piece.strip()
+        if _stuck_on_shell(name):
+            return True
+        if _ARGUMENT_TOOL_NAME.fullmatch(name) and _SHELL_WORDS.search(name):
+            return True
     return False
+
+
+def _split_case(text: str) -> str:
+    """Insert ``_`` at camelCase, PascalCase and letter/digit boundaries.
+
+    ``runCommand`` reads as ``run_Command``, ``HTTPShell`` as ``HTTP_Shell``
+    and ``x2bash`` as ``x_2_bash``. The separator is one the shell-word match
+    and the tool-name patterns already accept, so the split only adds word
+    boundaries; it never removes one. Words without an inner capital
+    (``Publish``, ``dashboard``) read the same as before.
+    """
+    return _CASE_BOUNDARY.sub("_", text)
 
 
 def _strip_invisible(text: str, replacement: str) -> str:

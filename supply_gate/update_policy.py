@@ -119,13 +119,13 @@ def parse_update_policy(
 def _mapping_from_file(path: Path) -> Mapping[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise UpdatePolicyError(f"update policy file unreadable: {path}") from exc
     if not text.strip():
         raise UpdatePolicyError("update policy file is empty")
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise UpdatePolicyError("update policy JSON is ill-formed") from exc
     if not isinstance(parsed, Mapping):
         raise UpdatePolicyError("update policy JSON must be an object")
