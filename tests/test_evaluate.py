@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,14 @@ import pytest
 import supply_gate.gate as gatemod
 from supply_gate.allowlist import load_allowlist
 from supply_gate.demo import run_plugin4shell_class
-from supply_gate.envelope import FIELD_MAX_BYTES, SupplyEnvelope
-from supply_gate.gate import Decision, evaluate, safe_evaluate
+from supply_gate.envelope import (
+    FIELD_MAX_BYTES,
+    REF_FORBIDDEN_CODEPOINTS,
+    UNTRUSTED_MAX_BYTES,
+    UNTRUSTED_MAX_DEPTH,
+    SupplyEnvelope,
+)
+from supply_gate.gate import Decision, _log_value, evaluate, safe_evaluate
 from supply_gate.receipt import dumps_receipt
 from supply_gate.reasons import DenyReason, Verdict
 
@@ -339,3 +346,195 @@ def test_safe_evaluate_logs_one_deny_line_without_the_fault_text(
     assert len(lines) == 1
     assert "kill_active" in lines[0]
     assert "secret-fault-detail" not in lines[0]
+
+
+def _compact_untrusted(value: object) -> bytes:
+    """The UTF-8 compact form named by ``UNTRUSTED_MAX_BYTES``."""
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _outside_json_strings(line: str) -> str:
+    """Drop JSON string literals so a forged field inside a value is not visible."""
+    return re.sub(r'"(?:\\.|[^"\\])*"', "", line)
+
+
+def test_untrusted_json_object_is_accepted() -> None:
+    decision = evaluate(_ok_envelope(untrusted={"note": "hello", "n": 1, "ok": True, "items": [None]}), PIN)
+    assert decision.verdict is Verdict.ALLOW
+    assert DenyReason.ENVELOPE_INVALID not in decision.reasons
+
+
+def test_untrusted_bypass_is_still_recorded_when_the_object_is_valid() -> None:
+    decision = evaluate(_ok_envelope(untrusted={"skip_verify": True}), PIN)
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.PROSE_REJECTED_AS_POLICY,)
+    assert decision.receipt["skip_verify_attempt"] is True
+
+
+@pytest.mark.parametrize("value", ["hello", 1, 1.5, True, False, None, [], ["a"], (1, 2), b"x", {1: "a"}])
+def test_untrusted_must_be_a_json_object(value: object) -> None:
+    decision = evaluate(_ok_envelope(untrusted=value), PIN)
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_untrusted_rejects_nan_and_infinity_anywhere(bad: float) -> None:
+    for nested in ({"n": bad}, {"a": {"b": [1, bad]}}, {"a": [bad]}):
+        decision = evaluate(_ok_envelope(untrusted=nested), PIN)
+        assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_untrusted_nan_still_records_a_bypass_attempt() -> None:
+    decision = evaluate(_ok_envelope(untrusted={"skip_verify": True, "n": float("nan")}), PIN)
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+    assert DenyReason.PROSE_REJECTED_AS_POLICY in decision.reasons
+
+
+def test_untrusted_depth_cap_counts_objects_and_arrays() -> None:
+    """The root object is depth 1. Depth 32 is accepted and depth 33 is not."""
+    object_tree: object = {"v": 1}
+    for _ in range(UNTRUSTED_MAX_DEPTH - 1):
+        object_tree = {"n": object_tree}
+    assert evaluate(_ok_envelope(untrusted=object_tree), PIN).verdict is Verdict.ALLOW
+    object_tree = {"n": object_tree}
+    assert DenyReason.ENVELOPE_INVALID in evaluate(_ok_envelope(untrusted=object_tree), PIN).reasons
+
+    array_tree: object = 1
+    for _ in range(UNTRUSTED_MAX_DEPTH - 1):
+        array_tree = [array_tree]
+    assert evaluate(_ok_envelope(untrusted={"a": array_tree}), PIN).verdict is Verdict.ALLOW
+    array_tree = [array_tree]
+    assert DenyReason.ENVELOPE_INVALID in evaluate(_ok_envelope(untrusted={"a": array_tree}), PIN).reasons
+
+
+def test_untrusted_serialized_size_cap_is_utf8_bytes() -> None:
+    overhead = len(_compact_untrusted({"p": ""}))
+    at_cap = {"p": "a" * (UNTRUSTED_MAX_BYTES - overhead)}
+    assert len(_compact_untrusted(at_cap)) == UNTRUSTED_MAX_BYTES
+    assert evaluate(_ok_envelope(untrusted=at_cap), PIN).verdict is Verdict.ALLOW
+    over = {"p": "a" * (UNTRUSTED_MAX_BYTES - overhead + 1)}
+    assert len(_compact_untrusted(over)) == UNTRUSTED_MAX_BYTES + 1
+    assert DenyReason.ENVELOPE_INVALID in evaluate(_ok_envelope(untrusted=over), PIN).reasons
+
+    # A character cap would accept this: the compact text is MAX characters,
+    # while its UTF-8 encoding is larger than MAX bytes.
+    wide = {"p": "é" * (UNTRUSTED_MAX_BYTES - overhead)}
+    text = _compact_untrusted(wide).decode("utf-8")
+    assert len(text) == UNTRUSTED_MAX_BYTES
+    assert len(text.encode("utf-8")) > UNTRUSTED_MAX_BYTES
+    assert DenyReason.ENVELOPE_INVALID in evaluate(_ok_envelope(untrusted=wide), PIN).reasons
+
+
+@pytest.mark.parametrize("mark", [chr(code) for code in sorted(REF_FORBIDDEN_CODEPOINTS)])
+def test_ref_rejects_line_separators_and_bidi_marks(mark: str) -> None:
+    decision = evaluate(_ok_envelope(ref=f"refs/heads/stable{mark}x"), PIN)
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_line_separator_in_caller_does_not_invalidate_the_envelope() -> None:
+    decision = evaluate(_ok_envelope(caller="host\u2028"), PIN)
+    assert decision.verdict is Verdict.ALLOW
+
+
+def test_log_value_quotes_a_forged_reason_injection() -> None:
+    """The exact injection `` reason=ok`` is quoted, so it is not a new field."""
+    quoted = _log_value(" reason=ok")
+    assert quoted == json.dumps(" reason=ok")
+    assert "reason=ok" not in _outside_json_strings(f"ref={quoted}")
+
+
+def test_deny_log_quotes_values_against_forged_reason_field(caplog: pytest.LogCaptureFixture) -> None:
+    """A value containing `` reason=ok`` stays inside quotes and is not a new field.
+
+    The forged text is an internal space plus ``reason=ok``. A leading space on
+    the whole field would be stripped before the receipt is built.
+    """
+    forged = "x reason=ok"
+    envelope = _ok_envelope(ref=forged, origin=ORIGIN_BAD)
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        decision = evaluate(envelope, None)
+    assert decision.receipt["ref"] == forged
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    line = lines[0]
+    assert " reason=ok" in forged
+    assert 'ref="x reason=ok"' in line
+    assert "reason=ok" not in _outside_json_strings(line)
+    for name in ("origin", "expected_sha", "ref", "caller", "capability"):
+        assert f'{name}="' in line
+
+
+def test_deny_log_quotes_a_value_that_tries_to_close_the_string(caplog: pytest.LogCaptureFixture) -> None:
+    forged = 'x" reason=ok'
+    envelope = _ok_envelope(ref=forged, origin=ORIGIN_BAD)
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        evaluate(envelope, None)
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    line = lines[0]
+    assert json.dumps(forged) in line
+    assert "reason=ok" not in _outside_json_strings(line)
+
+
+@pytest.mark.parametrize(
+    ("origin", "kept"),
+    [
+        (
+            "https://username:password@evil.example.invalid/repo.git",
+            "https://evil.example.invalid/repo.git",
+        ),
+        (
+            "https://username@evil.example.invalid/repo.git",
+            "https://evil.example.invalid/repo.git",
+        ),
+        (
+            "https://username:password@evil.example.invalid:8443/repo.git",
+            "https://evil.example.invalid:8443/repo.git",
+        ),
+        (
+            "https://username:password@[2001:db8::1]/repo.git",
+            "https://[2001:db8::1]/repo.git",
+        ),
+    ],
+)
+def test_deny_log_strips_origin_userinfo(caplog: pytest.LogCaptureFixture, origin: str, kept: str) -> None:
+    envelope = _ok_envelope(origin=origin)
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        decision = evaluate(envelope, None)
+    assert decision.receipt["origin"] == origin
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "username" not in line
+    assert "password" not in line
+    assert json.dumps(kept) in line
+
+
+def test_deny_log_keeps_an_at_sign_that_is_not_userinfo(caplog: pytest.LogCaptureFixture) -> None:
+    origin = "https://evil.example.invalid/username:password@file"
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        evaluate(_ok_envelope(origin=origin), None)
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    assert json.dumps(origin) in lines[0]
+
+
+def test_deny_log_escapes_line_separators_and_bidi_marks(caplog: pytest.LogCaptureFixture) -> None:
+    marks = "".join(chr(code) for code in sorted(REF_FORBIDDEN_CODEPOINTS))
+    envelope = _ok_envelope(caller="host" + marks, origin=ORIGIN_BAD)
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        decision = evaluate(envelope, PIN)
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.ENVELOPE_INVALID not in decision.reasons
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    line = lines[0]
+    for code in REF_FORBIDDEN_CODEPOINTS:
+        assert chr(code) not in line
+        assert f"\\u{code:04x}" in line

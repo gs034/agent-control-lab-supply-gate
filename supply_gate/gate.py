@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from supply_gate.allowlist import AllowlistError, load_allowlist
 from supply_gate.digest import digest_ok
@@ -221,19 +223,52 @@ def _normalize_head(observed_head: str | None) -> str | None:
 
 
 def _log_deny(receipt: Mapping[str, Any]) -> None:
-    """One DENY line: reason codes and truncated field values. No receipt body, no secrets."""
+    """One DENY line: reason codes and quoted, truncated field values.
+
+    No receipt body and no secrets. Origin userinfo is removed before the
+    value is quoted. Each value is a JSON string, so a space inside it cannot
+    forge another field.
+    """
     reasons = ",".join(str(reason) for reason in receipt.get("reasons") or ())
     fields = " ".join(
-        f"{name}={_log_value(receipt.get(name))}"
+        f"{name}={_log_value(_log_field(name, receipt.get(name)))}"
         for name in ("origin", "expected_sha", "ref", "caller", "capability")
     )
     logger.warning("DENY reasons=%s %s", reasons, fields)
 
 
+def _log_field(name: str, value: object) -> object:
+    if name == "origin" and isinstance(value, str):
+        return _strip_origin_userinfo(value)
+    return value
+
+
+def _strip_origin_userinfo(origin: str) -> str:
+    """Drop ``username:password@`` from an origin URL. Other strings stay as they are."""
+    parts = urlsplit(origin)
+    if parts.username is None and parts.password is None:
+        return origin
+    host = parts.hostname
+    if not host:
+        return origin
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{parts.port}" if parts.port is not None else host
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
 def _log_value(value: object) -> str:
+    """Quote a logged value. Missing values stay a single dash.
+
+    Control characters and lone surrogates become spaces. The result is a JSON
+    string with non-ASCII escaped, so U+2028, U+2029, bidi overrides
+    (U+202A-U+202E) and bidi isolates (U+2066-U+2069) cannot sit raw in the
+    line, and a space or quote inside the value cannot forge a field such as
+    ``reason=ok``.
+    """
     if not isinstance(value, str) or value == "":
         return "-"
-    cleaned = []
+    cleaned: list[str] = []
     for char in value:
         category = unicodedata.category(char)
         if category == "Cc" or category == "Cs":
@@ -241,9 +276,9 @@ def _log_value(value: object) -> str:
         else:
             cleaned.append(char)
     text = "".join(cleaned)
-    if len(text) <= _LOG_VALUE_MAX:
-        return text
-    return text[:_LOG_VALUE_MAX] + "..."
+    if len(text) > _LOG_VALUE_MAX:
+        text = text[:_LOG_VALUE_MAX] + "..."
+    return json.dumps(text, ensure_ascii=True)
 
 
 def _mapping_str(envelope: object, key: str) -> str | None:

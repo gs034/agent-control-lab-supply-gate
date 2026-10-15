@@ -977,10 +977,33 @@ def test_camel_case_shell_word_inside_a_longer_name_is_refused(value: str) -> No
 
 @pytest.mark.parametrize("value", ["fishFinder", "KshConfig", "CmdLine"])
 def test_camel_part_that_is_not_a_real_launcher_stays_allowed(value: str) -> None:
-    """fish, ksh and cmd are not real launchers as one part of a longer camelCase name."""
+    """cmd, ksh and fish are not grants when they are an earlier camel segment."""
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
     assert _evaluate({"allowed-tools": f"Read(a, {value})"}).verdict is Verdict.ALLOW
     assert _evaluate({"permissions": {"allow": [value]}}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "runCmd",
+        "runCMD",
+        "mcp__x__runCmd",
+        "mcp__x__runCMD",
+        "startKsh",
+        "startKSH",
+        "openFish",
+        "openFISH",
+        "Read(a, runCmd)",
+        "Read(a, runCMD)",
+        "Read(a, startKsh)",
+        "Read(a, openFish)",
+    ],
+)
+def test_camel_last_segment_cmd_ksh_fish_is_denied(value: str) -> None:
+    """The last camel segment is compared case-insensitively, so runCMD is denied and CmdLine is not."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
 @pytest.mark.parametrize("value", ["fish", "ksh", "cmd", "Fish", "Ksh", "Cmd"])

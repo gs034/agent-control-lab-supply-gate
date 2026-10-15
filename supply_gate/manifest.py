@@ -108,14 +108,15 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # ``eval.py``), as does a dotted name that is not a launcher suffix
 # (``Write(cmd.txt)``).
 # camelCase / PascalCase and letter/digit boundaries. A camel part is a grant
-# only when that whole part is a real launcher (``exec``, ``shell``,
-# ``bash``, ``run_command``). ``fish``, ``ksh`` and ``cmd`` are not real
-# launchers as one part of a longer name, so ``fishFinder``, ``KshConfig``
-# and ``CmdLine`` are not grants. ``runCommand``, ``execShell`` and
-# ``HTTPShell`` are. ``evalCode`` and ``sudoRun`` read as ``eval_code`` and
-# ``sudo_run``, which are not whole-token matches. ``readBashHistory`` and
-# ``terminalWidth`` are refused because ``bash`` and ``terminal`` are whole
-# camel parts that are real launchers.
+# when that whole part is a real launcher (``exec``, ``shell``, ``bash``,
+# ``run_command``). ``fish``, ``ksh`` and ``cmd`` are denied when they are the
+# last camel part, compared case-insensitively, so ``runCmd``, ``runCMD``,
+# ``mcp__x__runCmd``, ``startKsh`` and ``openFish`` are grants, while
+# ``CmdLine``, ``KshConfig`` and ``fishFinder`` are not. ``runCommand``,
+# ``execShell`` and ``HTTPShell`` are grants. ``evalCode`` and ``sudoRun``
+# read as ``eval_code`` and ``sudo_run``, which are not whole-token matches.
+# ``readBashHistory`` and ``terminalWidth`` are refused because ``bash`` and
+# ``terminal`` are whole camel parts that are real launchers.
 _CASE_BOUNDARY = re.compile(
     r"(?<=[a-z])(?=[A-Z])"
     r"|(?<=[A-Z])(?=[A-Z][a-z])"
@@ -124,8 +125,9 @@ _CASE_BOUNDARY = re.compile(
 )
 # Shell words that count when they are a whole camel part. ``fish``, ``ksh``
 # and ``cmd`` stay in the general list, so a head that is only that word is
-# still denied, but they are not real launchers inside ``fishFinder``,
-# ``KshConfig`` or ``CmdLine``.
+# still denied. Inside a longer camel name they count only as the last part
+# (see ``_CAMEL_TAIL_SHELLS``), so ``fishFinder``, ``KshConfig`` and ``CmdLine``
+# stay allowed.
 _CAMEL_LAUNCHERS = frozenset(
     {
         "bash",
@@ -146,6 +148,10 @@ _CAMEL_LAUNCHERS = frozenset(
         "busybox",
     }
 )
+# Denied when they are the last camel part. Comparison is case-insensitive,
+# so ``runCmd`` and ``runCMD`` are the same grant. An earlier part is not
+# enough: ``CmdLine``, ``KshConfig`` and ``fishFinder`` stay allowed.
+_CAMEL_TAIL_SHELLS = frozenset({"cmd", "ksh", "fish"})
 _ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\[\\]!#<=+\\\\\\s]+")
 # ``% ~ ^ * ?`` separate a shell word glued inside a token (``a%bash``,
 # ``a*bash``). On a path they are applied only to the last segment, so an
@@ -455,9 +461,11 @@ def _is_shell_grant(item: str) -> bool:
     invalid: ManifestError | None = None
     # Fixed order, every reading judged: a shell grant in any reading wins over
     # an ill-formed one, so the deny reason does not depend on evaluation order.
-    # The lowercase reading is unchanged. The camelCase reading denies only a
+    # The lowercase reading is unchanged. The camelCase reading denies a
     # whole camel part that is a real launcher, so runCommand, execShell and
-    # HTTPShell are grants, while fishFinder, KshConfig and CmdLine are not.
+    # HTTPShell are grants. It also denies cmd, ksh and fish when they are the
+    # last camel part, case-insensitively, so runCmd, runCMD, startKsh and
+    # openFish are grants, while fishFinder, KshConfig and CmdLine are not.
     # A non-whitespace control character is also read as a space, so NUL cannot
     # hide a shell word; if no reading is a shell grant the rule is ill-formed.
     stripped_forms = [_strip_invisible(norm, " "), _strip_invisible(norm, "")]
@@ -616,12 +624,13 @@ def _camel_text_names_launcher(text: str) -> bool:
 
 
 def _camel_token_is_launcher(token: str) -> bool:
-    """True when ``token``'s whole camel part is a real launcher.
+    """True when a whole camel part is a real launcher, or the last part is cmd, ksh or fish.
 
-    ``fish``, ``ksh`` and ``cmd`` do not count here, so ``fishFinder``,
-    ``KshConfig`` and ``CmdLine`` are not grants. ``runCommand`` is a grant
-    because the adjacent parts form ``run_command``. A dotted file name that
-    is not a launcher suffix (``myShell.ts``) is not a tool name.
+    The last-part check is case-insensitive, so ``runCmd`` and ``runCMD`` are
+    grants and ``CmdLine`` is not. ``fishFinder`` and ``KshConfig`` are not
+    grants. ``runCommand`` is a grant because the adjacent parts form
+    ``run_command``. A dotted file name that is not a launcher suffix
+    (``myShell.ts``) is not a tool name.
     """
     if not token:
         return False
@@ -635,6 +644,8 @@ def _camel_token_is_launcher(token: str) -> bool:
     elif "." in base:
         return False
     parts = _camel_parts(base)
+    if parts and parts[-1].lower() in _CAMEL_TAIL_SHELLS:
+        return True
     if any(part in _CAMEL_LAUNCHERS for part in parts):
         return True
     for left, right in zip(parts, parts[1:]):
