@@ -1,0 +1,13 @@
+Intent: evaluate_update_policy ignores weak_attempt, so a pin_and_verify policy carrying a waive flag (auto_update, skip_verify_on_update) passes.
+Property: a waive flag in the update policy is DENY (update_policy_rejected) even when the mode itself is pin_and_verify.
+--- a/supply_gate/update_policy.py
++++ b/supply_gate/update_policy.py
+@@ -159,7 +159,7 @@ def evaluate_update_policy(
+         return (DenyReason.UPDATE_POLICY_REJECTED,)
+     if policy is None:
+         return ()
+-    if weak_attempt or not policy.accepted():
++    if not policy.accepted():
+         return (DenyReason.UPDATE_POLICY_REJECTED,)
+     return ()
+ 

@@ -1,0 +1,13 @@
+Intent: NFKC normalisation of permission strings is disabled, so a compatibility-form spelling of a shell word is no longer folded to ASCII before shell matching.
+Property: a fullwidth or compatibility spelling of a shell word (e.g. U+FF22 U+FF41 U+FF53 U+FF48) must be classified as a shell grant (skill_shell_preapproved), not merely as an unparseable rule.
+--- a/supply_gate/manifest.py
++++ b/supply_gate/manifest.py
+@@ -400,7 +400,7 @@ def _is_shell_grant(item: str) -> bool:
+     An invisible format character may be dropped by one host and read as a
+     separator by another, so both readings are judged and either one denies.
+     """
+-    norm = unicodedata.normalize("NFKC", item)
++    norm = item
+     invalid: ManifestError | None = None
+     # Fixed order, every reading judged: a shell grant in any reading wins over
+     # an ill-formed one, so the deny reason does not depend on evaluation order.

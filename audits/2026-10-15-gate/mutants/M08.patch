@@ -1,0 +1,13 @@
+Intent: drop the glob-character check on a permission head, so Ba*, B?sh and *ash are no longer treated as a shell grant.
+Property: a permission head containing a glob character may expand to a shell-class tool on the host and must be DENY (skill_shell_preapproved).
+--- a/supply_gate/manifest.py
++++ b/supply_gate/manifest.py
+@@ -427,7 +427,7 @@ def _reading_grants_shell(reading: str) -> bool:
+             return True
+         if not _RULE_HEAD.fullmatch(head):
+             raise ManifestError("permissions rule name is not a plain tool name")
+-        if head in _WILDCARDS or _GLOB_CHARACTERS & set(head) or _SHELL_WORDS.search(head):
++        if head in _WILDCARDS or _SHELL_WORDS.search(head):
+             return True
+         if _mcp_server_wide(head):
+             return True

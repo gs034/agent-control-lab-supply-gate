@@ -1,0 +1,13 @@
+Intent: an empty allowed-origins set skips the origin check, turning an empty allowlist into allow-all.
+Property: an origin not in the allowlist is DENY (origin_not_allowlisted); an empty allowlist admits no origin and there is no implicit allow-all.
+--- a/supply_gate/gate.py
++++ b/supply_gate/gate.py
+@@ -94,7 +94,7 @@ def evaluate(
+         allowed, allowlist_ok = _resolve_allowed_origins(allowed_origins)
+         if not allowlist_ok:
+             reasons.append(DenyReason.ALLOWLIST_INVALID)
+-        if not origin_allowlisted(parsed.origin, allowed):
++        if allowed and not origin_allowlisted(parsed.origin, allowed):
+             reasons.append(DenyReason.ORIGIN_NOT_ALLOWLISTED)
+ 
+     if not verify_performed:
