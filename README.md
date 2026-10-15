@@ -14,7 +14,7 @@ The host is the policy point. A caller that is about to exercise an **install or
 
 ## What this is
 
-v0.3.1 / M1b host capability that demonstrates a diligence-hard control:
+v0.4.1 host capability (M1b corpus plus the v0.4 manifest deny classes) that demonstrates a diligence-hard control:
 
 1. **Pin** — envelope carries `expected_sha` and optional `ref`.
 2. **Allowlisted origin** — exact match to a host allowlist (git remote / package source).
