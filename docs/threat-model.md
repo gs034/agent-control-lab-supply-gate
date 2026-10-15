@@ -66,6 +66,7 @@ Each row carries a status as of 14 October 2026. **mitigated**: a test or an `ev
 | Control | Rule | Fail-closed outcome | Status (14 Oct 2026) |
 | --- | --- | --- | --- |
 | Pin | `expected_sha` must be a full digest; short / missing / ill-typed pin is invalid | `envelope_invalid` → DENY | mitigated |
+| Envelope keys | the envelope carries only the top-level keys the gate reads (`origin`, `expected_sha`, `caller`, `ref`, `capability`, `manifest`, `operation`, `untrusted`, and the bypass keys `skip_verify`, `waive_verify`, `trust_pin_only`, `bypass`); any other key, such as `Manifest`, `manifests` or a top-level `permissions`, would otherwise vanish unseen and is invalid | `envelope_invalid` → DENY | mitigated (S-13) |
 | Optional ref | `ref` may be present; it is not policy | never substitutes for HEAD | mitigated: a ref never substitutes for HEAD |
 | Origin allowlist | exact string match only; empty/broken config is not allow-all | `origin_not_allowlisted` or `allowlist_invalid` → DENY | mitigated |
 | Update policy | host config (file/env) must load; adapter path requires `pin_and_verify`; weak modes (`trust_ref`, `auto_latest`) rejected | `update_policy_rejected` → DENY | mitigated |

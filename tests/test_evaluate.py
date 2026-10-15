@@ -229,3 +229,51 @@ def test_kill_active_config_value_falsy_overrides_env(monkeypatch: pytest.Monkey
     monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", "1")
     decision = evaluate(_ok_envelope(), PIN, kill_active=value)  # type: ignore[arg-type]
     assert decision.verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"Manifest": {"permissions": ["Bash"]}},
+        {"manifests": {"permissions": ["Bash"]}},
+        {"permissions": ["Bash"]},
+        {"mcp_servers": [{"source": "https://evil.example/mcp"}]},
+        {"hooks": [{"source": "hooks/x.sh"}]},
+        {"Origin": ORIGIN_BAD},
+        {"notes": "harmless looking"},
+        {1: "non-string key"},
+    ],
+    ids=["Manifest", "manifests", "permissions", "mcp_servers", "hooks", "Origin", "notes", "int-key"],
+)
+def test_s13_unknown_top_level_envelope_key_is_invalid(extra: dict) -> None:
+    """S-13 PoC: a top-level ``Manifest`` or ``permissions`` silently vanished and the envelope was ALLOW."""
+    from supply_gate.adapters import RecordingStubAdapter, gated_install_or_update
+    from supply_gate.allowlist import AllowlistConfig
+
+    envelope = _ok_envelope()
+    envelope.update(extra)
+    allowed = load_allowlist(use_env=False).origins
+    decision = evaluate(envelope, PIN, allowed_origins=allowed, kill_active=False)
+    assert decision.verdict is Verdict.DENY
+    assert decision.reasons == (DenyReason.ENVELOPE_INVALID,)
+    parsed, _skip = SupplyEnvelope.from_mapping(envelope)
+    assert parsed is None
+    gated = gated_install_or_update(
+        envelope,
+        RecordingStubAdapter(PIN),
+        allowlist=AllowlistConfig(origins=allowed, source="t"),
+        update_policy_raw={"mode": "pin_and_verify"},
+        use_env=False,
+    )
+    assert gated.reasons == (DenyReason.ENVELOPE_INVALID,)
+
+
+def test_s13_known_envelope_keys_still_parse() -> None:
+    allowed = load_allowlist(use_env=False).origins
+    envelope = _ok_envelope(operation="install", manifest={"permissions": ["Read"]}, untrusted={"note": "x"})
+    assert evaluate(envelope, PIN, allowed_origins=allowed, kill_active=False).verdict is Verdict.ALLOW
+    for key in ("skip_verify", "waive_verify", "trust_pin_only", "bypass"):
+        decision = evaluate(_ok_envelope(**{key: True}), PIN, allowed_origins=allowed, kill_active=False)
+        assert decision.reasons == (DenyReason.PROSE_REJECTED_AS_POLICY,)
+        decision = evaluate(_ok_envelope(**{key: False}), PIN, allowed_origins=allowed, kill_active=False)
+        assert decision.verdict is Verdict.ALLOW

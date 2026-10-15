@@ -11,6 +11,13 @@ from supply_gate.manifest import ManifestError, SupplyManifest, parse_manifest
 
 # Structured fields that attempt to waive host verify. Never honoured as policy.
 _BYPASS_KEYS = frozenset({"skip_verify", "waive_verify", "trust_pin_only", "bypass"})
+# Every top-level key the gate reads. ``operation`` is read by the adapter
+# path (``infer_operation``) and ``untrusted`` carries nested bypass keys. Any
+# other key is refused: a misspelt or misplaced field (``Manifest``,
+# ``manifests``, a top-level ``permissions``) would otherwise vanish unseen.
+_ENVELOPE_KEYS = frozenset(
+    {"origin", "expected_sha", "caller", "ref", "capability", "manifest", "operation", "untrusted"}
+) | _BYPASS_KEYS
 
 
 @dataclass(frozen=True)
@@ -28,10 +35,13 @@ class SupplyEnvelope:
         """Parse a mapping.
 
         Returns (envelope_or_none, skip_verify_attempt).
-        envelope_or_none is None when required fields are missing or ill-typed.
+        envelope_or_none is None when required fields are missing or ill-typed,
+        or when the mapping carries a top-level key the gate does not read.
         skip_verify_attempt is True when untrusted structured data tries to waive verify.
         """
         skip_attempt = _skip_verify_attempt(raw)
+        if any(not isinstance(key, str) or key not in _ENVELOPE_KEYS for key in raw):
+            return None, skip_attempt
         origin = raw.get("origin")
         expected_sha = raw.get("expected_sha")
         caller = raw.get("caller")
