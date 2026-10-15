@@ -472,6 +472,49 @@ def test_remote_mcp_server_is_never_pinned(server: dict) -> None:
     assert _evaluate(manifest, observed_mcp_servers=seen).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
 
 
+@pytest.mark.parametrize("pin", ["abc123", "a" * 39, "a" * 41, "g" * 40, "latest", "v1.2.3"])
+def test_short_or_malformed_pin_is_unpinned_even_when_echoed(pin: str) -> None:
+    """Mutation audit 2026-10-14-gate, M06: a pin is a full 40- or 64-hex digest.
+    Anything else is unpinned on its own terms, before any observed digest is
+    compared, so an adapter echoing the same malformed string changes nothing."""
+    from supply_gate.manifest import PinnedSource
+
+    assert PinnedSource(source="x", pin=pin).pinned is False
+    assert PinnedSource(source="x", pin=pin, remote=True).pinned is False
+    servers = {"mcp_servers": [{"name": "files", "source": "x", "pin": pin}]}
+    assert _evaluate(servers, observed_mcp_servers={"x": pin}).reasons == (
+        DenyReason.MCP_SERVER_UNPINNED,
+    )
+    hooks = {"hooks": [{"name": "h", "source": "hooks/h.py", "pin": pin}]}
+    assert _evaluate(hooks, observed_hooks={"hooks/h.py": pin}).reasons == (
+        DenyReason.HOOK_UPDATE_UNVERIFIED,
+    )
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        {"type": "http", "url": "https://mcp.example.invalid/r", "pin": "1" * 40},
+        {"type": "sse", "url": "https://mcp.example.invalid/r", "pin": "1" * 40},
+        {"type": "streamable-http", "url": "https://mcp.example.invalid/r", "pin": "1" * 64},
+        {"url": "https://mcp.example.invalid/r", "pin": "1" * 40},
+    ],
+)
+def test_one_remote_mcp_server_among_pinned_local_ones_is_deny(remote: dict) -> None:
+    """Mutation audit 2026-10-14-gate, M07: one remote MCP server is DENY however
+    the other servers are pinned and observed. The remote entry carries a
+    well-formed pin and a matching observation, the shape a marketplace plugin
+    would ship to hide one live server behind pinned local ones."""
+    local = {"command": "npx", "args": ["-y", "mcp-files"], "pin": PIN}
+    local_key = mcp_observation_key({"command": "npx", "args": ["-y", "mcp-files"]})
+    seen = {local_key: PIN, remote["url"]: remote["pin"]}
+    control = _evaluate({"mcpServers": {"files": local}}, observed_mcp_servers=seen)
+    assert control.verdict is Verdict.ALLOW
+    mixed = _evaluate({"mcpServers": {"files": local, "browser": remote}}, observed_mcp_servers=seen)
+    assert mixed.verdict is Verdict.DENY
+    assert mixed.reasons == (DenyReason.MCP_SERVER_UNPINNED,)
+
+
 def test_gated_path_forwards_observed_mcp_digests() -> None:
     manifest = {"mcpServers": {"x": {"command": "npx", "args": ["-y", "m"], "pin": PIN}}}
     envelope = _envelope(manifest)
