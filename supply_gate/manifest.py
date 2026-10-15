@@ -84,6 +84,16 @@ _CASE_BOUNDARY = re.compile(
     r"|(?<=[0-9])(?=[A-Za-z])"
 )
 _ARGUMENT_SPLIT = re.compile(r"[,();|\s]+")
+# Marks a host may strip, or treat as a word boundary, inside an argument:
+# ASCII quotes and brackets, Unicode quote and bracket punctuation (categories
+# Pi, Pf, Ps, Pe), control and other ``C`` characters, and combining marks
+# (``M``). A piece holding one fails the tool-name scan, so it used to be
+# skipped (``Read(x 'Bash')``). Each argument is now judged twice: once with
+# every such mark read as a separator and once with every mark removed, so
+# ``'Bash'``, ``[b]ash`` and ``ba''sh`` all reach the shell-word match.
+# Parentheses stay separators in both readings; the rule split owns them.
+_ARGUMENT_MARKS = frozenset("'\"`[]{}<>")
+_ARGUMENT_MARK_CATEGORIES = frozenset({"Pi", "Pf", "Ps", "Pe"})
 # An argument piece longer than this is not read as a tool name. It is judged
 # by the shell-word match alone, so any shell word inside it denies.
 _MAX_ARGUMENT_PIECE = 256
@@ -465,7 +475,26 @@ def _argument_names_shell(reading: str) -> bool:
     spelling, a hyphen-suffix spelling, a colon-suffix spelling
     (``bash:*``, ``bash:ls``), and a glob or punctuation mark glued onto a
     shell word (``bash*``, ``bash?``, ``bash/*``, ``bash=*``) count as tool names.
+    Quotes, brackets, control characters and combining marks are judged both
+    as separators and as removed (``Read(x 'Bash')``, ``Read(x [b]ash)``).
     """
+    marks = [char not in "()" and _argument_mark(char) for char in reading]
+    if not any(marks):
+        return _pieces_name_shell(reading)
+    as_separator = "".join(" " if mark else char for char, mark in zip(reading, marks))
+    removed = "".join("" if mark else char for char, mark in zip(reading, marks))
+    return _pieces_name_shell(as_separator) or _pieces_name_shell(removed)
+
+
+def _argument_mark(char: str) -> bool:
+    """True for a quote, bracket, control or combining character (see ``_ARGUMENT_MARKS``)."""
+    if char in _ARGUMENT_MARKS:
+        return True
+    category = unicodedata.category(char)
+    return category[0] in "CM" or category in _ARGUMENT_MARK_CATEGORIES
+
+
+def _pieces_name_shell(reading: str) -> bool:
     for piece in _ARGUMENT_SPLIT.split(reading):
         name = piece.strip()
         if _stuck_on_shell(name) or _mcp_server_wide(name):
