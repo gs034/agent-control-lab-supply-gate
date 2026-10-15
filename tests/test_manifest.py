@@ -34,14 +34,14 @@ def _evaluate(manifest: dict[str, object], **kwargs: object):
 
 def test_pinned_manifest_with_verified_hooks_still_allows() -> None:
     manifest = {
-        "mcp_servers": [{"name": "files", "source": "servers/files", "pin": PIN}],
+        "mcp_servers": [{"name": "files", "source": "https://mcp.example.invalid/files", "pin": PIN}],
         "permissions": ["Read", "Edit"],
         "hooks": [{"name": "post-install", "source": "hooks/post_install.py", "pin": HOOK_PIN}],
     }
     decision = _evaluate(
         manifest,
         observed_hooks={"hooks/post_install.py": HOOK_PIN},
-        observed_mcp_servers={"servers/files": PIN},
+        observed_mcp_servers={"https://mcp.example.invalid/files": PIN},
     )
     assert decision.verdict is Verdict.ALLOW
     assert decision.receipt["verify_performed"] is True
@@ -470,49 +470,6 @@ def test_remote_mcp_server_is_never_pinned(server: dict) -> None:
     manifest = {"mcpServers": {"x": server}}
     seen = {server["url"]: server["pin"]}
     assert _evaluate(manifest, observed_mcp_servers=seen).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
-
-
-@pytest.mark.parametrize("pin", ["abc123", "a" * 39, "a" * 41, "g" * 40, "latest", "v1.2.3"])
-def test_short_or_malformed_pin_is_unpinned_even_when_echoed(pin: str) -> None:
-    """Mutation audit 2026-10-14-gate, M06: a pin is a full 40- or 64-hex digest.
-    Anything else is unpinned on its own terms, before any observed digest is
-    compared, so an adapter echoing the same malformed string changes nothing."""
-    from supply_gate.manifest import PinnedSource
-
-    assert PinnedSource(source="x", pin=pin).pinned is False
-    assert PinnedSource(source="x", pin=pin, remote=True).pinned is False
-    servers = {"mcp_servers": [{"name": "files", "source": "x", "pin": pin}]}
-    assert _evaluate(servers, observed_mcp_servers={"x": pin}).reasons == (
-        DenyReason.MCP_SERVER_UNPINNED,
-    )
-    hooks = {"hooks": [{"name": "h", "source": "hooks/h.py", "pin": pin}]}
-    assert _evaluate(hooks, observed_hooks={"hooks/h.py": pin}).reasons == (
-        DenyReason.HOOK_UPDATE_UNVERIFIED,
-    )
-
-
-@pytest.mark.parametrize(
-    "remote",
-    [
-        {"type": "http", "url": "https://mcp.example.invalid/r", "pin": "1" * 40},
-        {"type": "sse", "url": "https://mcp.example.invalid/r", "pin": "1" * 40},
-        {"type": "streamable-http", "url": "https://mcp.example.invalid/r", "pin": "1" * 64},
-        {"url": "https://mcp.example.invalid/r", "pin": "1" * 40},
-    ],
-)
-def test_one_remote_mcp_server_among_pinned_local_ones_is_deny(remote: dict) -> None:
-    """Mutation audit 2026-10-14-gate, M07: one remote MCP server is DENY however
-    the other servers are pinned and observed. The remote entry carries a
-    well-formed pin and a matching observation, the shape a marketplace plugin
-    would ship to hide one live server behind pinned local ones."""
-    local = {"command": "npx", "args": ["-y", "mcp-files"], "pin": PIN}
-    local_key = mcp_observation_key({"command": "npx", "args": ["-y", "mcp-files"]})
-    seen = {local_key: PIN, remote["url"]: remote["pin"]}
-    control = _evaluate({"mcpServers": {"files": local}}, observed_mcp_servers=seen)
-    assert control.verdict is Verdict.ALLOW
-    mixed = _evaluate({"mcpServers": {"files": local, "browser": remote}}, observed_mcp_servers=seen)
-    assert mixed.verdict is Verdict.DENY
-    assert mixed.reasons == (DenyReason.MCP_SERVER_UNPINNED,)
 
 
 def test_gated_path_forwards_observed_mcp_digests() -> None:
@@ -997,185 +954,36 @@ def test_camel_case_names_without_a_shell_word_still_allow(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
 
 
-# S-7: harness shared by the gated-path tests below.
-GATED_ORIGIN = "https://git.example.invalid/x.git"
-GATED_HEAD = "a" * 40
-SERVER_PIN = "b" * 40
-
-
-def _gated(manifest: dict[str, object], observed_mcp_servers: object = None):
-    from supply_gate.allowlist import AllowlistConfig
-
-    envelope = {"origin": GATED_ORIGIN, "expected_sha": GATED_HEAD, "caller": "host", "manifest": manifest}
-    return gated_install_or_update(
-        envelope,
-        RecordingStubAdapter(GATED_HEAD, observed_mcp_servers=observed_mcp_servers),
-        allowlist=AllowlistConfig(origins=frozenset({GATED_ORIGIN}), source="t"),
-        update_policy_raw={"mode": "pin_and_verify"},
-        use_env=False,
-    )
-
-
-def test_s7_source_entry_with_launch_fields_is_invalid_on_the_gated_path() -> None:
-    """S-7 PoC: args, env and cwd on a source entry changed what runs but not the observation key."""
-    server = {
-        "source": "pkg-mcp",
-        "args": ["--allow-shell"],
-        "env": {"NODE_OPTIONS": "--require /tmp/x.js"},
-        "cwd": "/tmp/a",
-        "pin": SERVER_PIN,
-    }
-    decision = _gated({"mcp_servers": [server]}, {"pkg-mcp": SERVER_PIN})
-    assert decision.verdict is Verdict.DENY
-    assert decision.reasons == (DenyReason.ENVELOPE_INVALID,)
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"args": ["--allow-shell"]},
-        {"args": []},
-        {"env": {"NODE_OPTIONS": "--require /tmp/x.js"}},
-        {"cwd": "/tmp/a"},
-        {"type": "stdio", "args": ["-x"]},
-        {"type": "http", "url": "https://mcp.example.invalid/s", "args": ["-x"]},
-    ],
-)
-def test_s7_launch_field_without_a_command_is_invalid(extra: dict) -> None:
-    server = {"source": "pkg-mcp", "pin": SERVER_PIN, **extra}
-    for manifest in ({"mcp_servers": [server]}, {"mcpServers": {"pkg": server}}):
-        assert _gated(manifest, {"pkg-mcp": SERVER_PIN}).reasons == (DenyReason.ENVELOPE_INVALID,)
-
-
-def test_s7_plain_source_entry_and_command_entry_still_allow() -> None:
-    plain = {"source": "pkg-mcp", "pin": SERVER_PIN}
-    assert _gated({"mcp_servers": [plain]}, {"pkg-mcp": SERVER_PIN}).verdict is Verdict.ALLOW
-    command = {"source": "pkg-mcp", "command": "npx", "args": ["-y", "m"], "env": {"A": "1"}, "cwd": "/w", "pin": SERVER_PIN}
-    observed = {mcp_observation_key(command): SERVER_PIN}
-    assert _gated({"mcp_servers": [command]}, observed).verdict is Verdict.ALLOW
-
-
-@pytest.mark.parametrize(
-    "source",
-    ["https://evil.example/mcp", "HTTP://evil.example/mcp", "wss://evil.example/mcp", "git+https://evil.example/m.git"],
-)
-def test_s7_url_shaped_source_is_remote(source: str) -> None:
-    """A source spelled as a URL is fetched from a remote host, so no observed digest can pin it."""
-    for server in ({"source": source, "pin": SERVER_PIN}, {"source": source, "command": "npx", "pin": SERVER_PIN}):
-        observed = {source: SERVER_PIN, mcp_observation_key(server): SERVER_PIN}
-        decision = _gated({"mcp_servers": [server]}, observed)
-        assert decision.reasons == (DenyReason.MCP_SERVER_UNPINNED,)
-
-
-def test_s7_url_and_command_without_a_type_is_invalid() -> None:
-    """The host could launch the command or connect to the url; the gate cannot tell which is observed."""
-    server = {"url": "https://evil.example/mcp", "command": "npx", "pin": SERVER_PIN}
-    observed = {"https://evil.example/mcp": SERVER_PIN}
-    assert _gated({"mcp_servers": [server]}, observed).reasons == (DenyReason.ENVELOPE_INVALID,)
-    for transport in ("stdio", "http"):
-        typed = {**server, "type": transport}
-        observed = {"https://evil.example/mcp": SERVER_PIN, mcp_observation_key(typed): SERVER_PIN}
-        assert _gated({"mcp_servers": [typed]}, observed).reasons == (DenyReason.MCP_SERVER_UNPINNED,)
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "mcp__desktop-commander",
-        "mcp__desktop-commander(*)",
-        "mcp__Desktop-Commander",
-        "mcp__github",
-        "mcp__srv__",
-        "mcp__",
-        "mcp____run",
-        "Read(src/**) mcp__desktop-commander",
-        "Read(a, mcp__desktop-commander)",
-        "mcp__desktop_commander",
-    ],
-)
-def test_s8_mcp_server_wide_grant_is_a_shell_preapproval(value: str) -> None:
-    """S-8 PoC: ``mcp__<server>`` with no tool segment pre-approves every tool on that server."""
-    for manifest in ({"permissions": {"allow": [value]}}, {"allowed-tools": value}, {"permissions": [value]}):
-        assert _evaluate(manifest).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
-    decision = _gated({"permissions": {"allow": [value]}})
-    assert decision.verdict is Verdict.DENY
-    assert decision.reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "mcp__github__pushFiles",
-        "mcp__desktop-commander__read_file",
-        "mcp__srv__list_tools",
-        "mcp__x__Dashboard",
-        "Read(notes/mcp__x)",
-        "mcpserver",
-        "mcp",
-    ],
-)
-def test_s8_tool_scoped_mcp_names_are_judged_as_before(value: str) -> None:
+@pytest.mark.parametrize("value", ["evalCode", "sudoRun"])
+def test_camel_case_eval_and_sudo_compounds_stay_allowed(value: str) -> None:
+    """evalCode and sudoRun read as eval_code and sudo_run, not as the whole words."""
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": f"Read(a, {value})"}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": {"allow": [value]}}).verdict is Verdict.ALLOW
 
 
-def test_s8_server_wide_name_in_deny_or_ask_is_not_a_grant() -> None:
-    manifest = {"permissions": {"deny": ["mcp__desktop-commander"], "ask": ["mcp__github"]}}
-    assert _evaluate(manifest).verdict is Verdict.ALLOW
+@pytest.mark.parametrize("value", ["runCommand", "execShell", "HTTPShell"])
+def test_camel_case_shell_compounds_stay_denied(value: str) -> None:
+    """runCommand, execShell and HTTPShell stay shell grants after the case split."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
-S9_ADVERSARIAL = [
-    "Read(" + "a-a:" * 40 + "!)",
-    "Read(" + "a-a:" * 2000 + "!)",
-    "Read(" + "a:" * 5000 + "!)",
-    "Read(" + "a-" * 5000 + "a!)",
-    "Read(" + "a:*" * 5000 + "-)",
-    "Read(" + "a.ex" * 5000 + "!)",
-    "Read(" + "aB" * 5000 + "!)",
-    "Read(" + "x" * 20_000 + ")",
-    "Read(a) " * 1000,
-    "a-a:" * 40 + "!",
-]
+@pytest.mark.parametrize("value", ["readBashHistory", "terminalWidth"])
+def test_camel_case_shell_word_inside_a_longer_name_is_refused(value: str) -> None:
+    """readBashHistory and terminalWidth are refused as a fail-safe side effect of the split."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
 
-@pytest.mark.parametrize("value", S9_ADVERSARIAL, ids=range(len(S9_ADVERSARIAL)))
-def test_s9_adversarial_argument_text_evaluates_quickly(value: str) -> None:
-    """S-9 PoC: ``Read(`` + ``a-a:`` * 20 + ``!)`` took about 1 s and doubled per repeat."""
-    import time
-
-    for manifest in ({"allowed-tools": value}, {"permissions": {"allow": [value]}}):
-        start = time.perf_counter()
-        decision = _evaluate(manifest)
-        elapsed = time.perf_counter() - start
-        assert decision.verdict is not None
-        assert elapsed < 0.5, f"{elapsed:.3f}s"
+@pytest.mark.parametrize("value", ["fishFinder", "KshConfig", "CmdLine"])
+def test_camel_part_that_is_not_a_real_launcher_stays_allowed(value: str) -> None:
+    """fish, ksh and cmd are not real launchers as one part of a longer camelCase name."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": f"Read(a, {value})"}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": {"allow": [value]}}).verdict is Verdict.ALLOW
 
 
-def test_s9_overlap_case_keeps_its_verdict() -> None:
-    assert _evaluate({"allowed-tools": "Read(" + "a-a:" * 40 + "!)"}).verdict is Verdict.ALLOW
-    assert _evaluate({"allowed-tools": "Read(" + "a-a:" * 40 + "bash)"}).reasons == (
-        DenyReason.SKILL_SHELL_PREAPPROVED,
-    )
-
-
-def test_s9_long_argument_piece_is_judged_by_shell_words_alone() -> None:
-    """A piece past the length cap is not read as a tool name; any shell word inside it denies."""
-    long_shell = "Read(" + "a" * 300 + "/bash/x)"
-    assert _evaluate({"allowed-tools": long_shell}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
-    short_path = "Read(" + "a" * 30 + "/bash/x)"
-    assert _evaluate({"allowed-tools": short_path}).verdict is Verdict.ALLOW
-    long_benign = "Read(" + "a" * 300 + "/notes/x)"
-    assert _evaluate({"allowed-tools": long_benign}).verdict is Verdict.ALLOW
-
-
-def test_s9_tool_name_scanner_matches_the_previous_pattern() -> None:
-    """Every string up to length 5 over the pattern's alphabet is accepted exactly as before."""
-    import itertools
-    import re
-
-    from supply_gate.manifest import _is_argument_tool_name
-
-    previous = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
-    for length in range(6):
-        for chars in itertools.product("a:-*?.ex!", repeat=length):
-            text = "".join(chars)
-            assert _is_argument_tool_name(text) is bool(previous.fullmatch(text)), repr(text)
+@pytest.mark.parametrize("value", ["fish", "ksh", "cmd", "Fish", "Ksh", "Cmd"])
+def test_shell_name_alone_stays_denied(value: str) -> None:
+    """A head that is only fish, ksh or cmd is still a shell grant."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)

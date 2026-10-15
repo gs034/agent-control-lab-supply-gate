@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ import pytest
 import supply_gate.gate as gatemod
 from supply_gate.allowlist import load_allowlist
 from supply_gate.demo import run_plugin4shell_class
-from supply_gate.envelope import SupplyEnvelope
+from supply_gate.envelope import FIELD_MAX_BYTES, SupplyEnvelope
 from supply_gate.gate import Decision, evaluate, safe_evaluate
 from supply_gate.receipt import dumps_receipt
 from supply_gate.reasons import DenyReason, Verdict
@@ -229,3 +230,112 @@ def test_kill_active_config_value_falsy_overrides_env(monkeypatch: pytest.Monkey
     monkeypatch.setenv("ACL_SUPPLY_GATE_KILL", "1")
     decision = evaluate(_ok_envelope(), PIN, kill_active=value)  # type: ignore[arg-type]
     assert decision.verdict is Verdict.ALLOW
+
+
+def test_documented_field_caps() -> None:
+    """Each string field has a documented byte cap. ref is 4 KiB."""
+    assert FIELD_MAX_BYTES == {
+        "origin": 2048,
+        "expected_sha": 128,
+        "caller": 256,
+        "ref": 4096,
+        "capability": 256,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("origin", 12),
+        ("expected_sha", 12),
+        ("caller", 12),
+        ("ref", ["refs/heads/stable"]),
+        ("capability", {"name": "plugin.install_or_update"}),
+    ],
+)
+def test_non_string_envelope_field_is_invalid(field: str, value: object) -> None:
+    decision = evaluate(_ok_envelope(**{field: value}), PIN)
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_unknown_top_level_key_is_invalid() -> None:
+    decision = evaluate(_ok_envelope(note="hello"), PIN)
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_non_string_top_level_key_is_invalid() -> None:
+    raw = _ok_envelope()
+    raw[1] = "x"  # type: ignore[index]
+    decision = evaluate(raw, PIN)
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+@pytest.mark.parametrize("field", ["origin", "expected_sha", "caller", "ref", "capability"])
+def test_field_over_its_byte_cap_is_invalid(field: str) -> None:
+    decision = evaluate(_ok_envelope(**{field: "a" * (FIELD_MAX_BYTES[field] + 1)}), PIN)
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_ref_at_four_kib_is_accepted_and_one_more_byte_is_not() -> None:
+    at_cap = "é" * 2048
+    assert len(at_cap.encode("utf-8")) == FIELD_MAX_BYTES["ref"] == 4096
+    assert evaluate(_ok_envelope(ref=at_cap), PIN).verdict is Verdict.ALLOW
+    over = "é" * 2049
+    assert len(over.encode("utf-8")) == 4098
+    assert DenyReason.ENVELOPE_INVALID in evaluate(_ok_envelope(ref=over), PIN).reasons
+
+
+@pytest.mark.parametrize("field", ["caller", "ref", "capability", "origin"])
+@pytest.mark.parametrize("mark", ["\n", "\x00", "\x7f", "\ud800"])
+def test_control_or_lone_surrogate_in_a_string_field_is_invalid(field: str, mark: str) -> None:
+    current = _ok_envelope()[field]
+    assert isinstance(current, str)
+    decision = evaluate(_ok_envelope(**{field: current + mark}), PIN)
+    assert DenyReason.ENVELOPE_INVALID in decision.reasons
+
+
+def test_deny_logs_one_line_with_reasons_and_truncated_values(caplog: pytest.LogCaptureFixture) -> None:
+    """A DENY writes one line in addition to the receipt. Values are truncated; secrets are not copied out."""
+    secret = "token-" + ("s" * 200)
+    prose = "super-secret-prose-should-not-be-logged"
+    envelope = _ok_envelope(ref=secret, origin=ORIGIN_BAD)
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        decision = evaluate(envelope, None, untrusted_prose=prose)
+    assert decision.verdict is Verdict.DENY
+    assert decision.receipt["ref"] == secret
+    assert DenyReason.ORIGIN_NOT_ALLOWLISTED in decision.reasons
+    assert DenyReason.VERIFY_MISSING in decision.reasons
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "\n" not in line
+    assert "origin_not_allowlisted" in line
+    assert "verify_missing" in line
+    assert secret not in line
+    assert prose not in line
+    assert secret[:64] in line
+    assert line.endswith("...") or "ref=" in line
+
+
+def test_allow_does_not_log_a_deny_line(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        decision = evaluate(_ok_envelope(), PIN)
+    assert decision.verdict is Verdict.ALLOW
+    assert [record for record in caplog.records if record.getMessage().startswith("DENY ")] == []
+
+
+def test_safe_evaluate_logs_one_deny_line_without_the_fault_text(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args: object, **_kwargs: object) -> Decision:
+        raise RuntimeError("secret-fault-detail")
+
+    monkeypatch.setattr(gatemod, "evaluate", boom)
+    with caplog.at_level(logging.WARNING, logger="supply_gate.gate"):
+        decision = safe_evaluate(_ok_envelope(), PIN)
+    assert decision.reasons == (DenyReason.KILL_ACTIVE,)
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("DENY ")]
+    assert len(lines) == 1
+    assert "kill_active" in lines[0]
+    assert "secret-fault-detail" not in lines[0]

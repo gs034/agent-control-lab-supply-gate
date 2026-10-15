@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -14,6 +16,10 @@ from supply_gate.manifest import SupplyManifest
 from supply_gate.origins import origin_allowlisted
 from supply_gate.reasons import REASON_ORDER, DenyReason, Verdict
 from supply_gate.receipt import build_receipt
+
+logger = logging.getLogger(__name__)
+# Logged field values are cut here so a DENY line cannot carry a secret in full.
+_LOG_VALUE_MAX = 64
 
 KILL_ENV = "ACL_SUPPLY_GATE_KILL"
 # Kill switch spellings, compared after strip() and lower(). A non-empty value
@@ -125,6 +131,8 @@ def evaluate(
         untrusted_prose_present=prose_present,
         skip_verify_attempt=skip_attempt,
     )
+    if verdict is Verdict.DENY:
+        _log_deny(receipt)
     return Decision(verdict=verdict, reasons=unique, receipt=receipt)
 
 
@@ -153,6 +161,7 @@ def safe_evaluate(
             untrusted_prose_present=False,
             skip_verify_attempt=False,
         )
+        _log_deny(receipt)
         return Decision(verdict=Verdict.DENY, reasons=(DenyReason.KILL_ACTIVE,), receipt=receipt)
 
 
@@ -209,6 +218,32 @@ def _normalize_head(observed_head: str | None) -> str | None:
     if not digest_ok(value):
         return None
     return value
+
+
+def _log_deny(receipt: Mapping[str, Any]) -> None:
+    """One DENY line: reason codes and truncated field values. No receipt body, no secrets."""
+    reasons = ",".join(str(reason) for reason in receipt.get("reasons") or ())
+    fields = " ".join(
+        f"{name}={_log_value(receipt.get(name))}"
+        for name in ("origin", "expected_sha", "ref", "caller", "capability")
+    )
+    logger.warning("DENY reasons=%s %s", reasons, fields)
+
+
+def _log_value(value: object) -> str:
+    if not isinstance(value, str) or value == "":
+        return "-"
+    cleaned = []
+    for char in value:
+        category = unicodedata.category(char)
+        if category == "Cc" or category == "Cs":
+            cleaned.append(" ")
+        else:
+            cleaned.append(char)
+    text = "".join(cleaned)
+    if len(text) <= _LOG_VALUE_MAX:
+        return text
+    return text[:_LOG_VALUE_MAX] + "..."
 
 
 def _mapping_str(envelope: object, key: str) -> str | None:

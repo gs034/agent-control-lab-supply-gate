@@ -107,6 +107,45 @@ _RULE_HEAD = re.compile(r"[a-z0-9_.:*?@/-]+")
 # ``domain:sh.example``, ``.env``, ``src/env/config.py``, ``docs/su/x``,
 # ``eval.py``), as does a dotted name that is not a launcher suffix
 # (``Write(cmd.txt)``).
+# camelCase / PascalCase and letter/digit boundaries. A camel part is a grant
+# only when that whole part is a real launcher (``exec``, ``shell``,
+# ``bash``, ``run_command``). ``fish``, ``ksh`` and ``cmd`` are not real
+# launchers as one part of a longer name, so ``fishFinder``, ``KshConfig``
+# and ``CmdLine`` are not grants. ``runCommand``, ``execShell`` and
+# ``HTTPShell`` are. ``evalCode`` and ``sudoRun`` read as ``eval_code`` and
+# ``sudo_run``, which are not whole-token matches. ``readBashHistory`` and
+# ``terminalWidth`` are refused because ``bash`` and ``terminal`` are whole
+# camel parts that are real launchers.
+_CASE_BOUNDARY = re.compile(
+    r"(?<=[a-z])(?=[A-Z])"
+    r"|(?<=[A-Z])(?=[A-Z][a-z])"
+    r"|(?<=[A-Za-z])(?=[0-9])"
+    r"|(?<=[0-9])(?=[A-Za-z])"
+)
+# Shell words that count when they are a whole camel part. ``fish``, ``ksh``
+# and ``cmd`` stay in the general list, so a head that is only that word is
+# still denied, but they are not real launchers inside ``fishFinder``,
+# ``KshConfig`` or ``CmdLine``.
+_CAMEL_LAUNCHERS = frozenset(
+    {
+        "bash",
+        "sh",
+        "shell",
+        "exec",
+        "execute",
+        "powershell",
+        "pwsh",
+        "zsh",
+        "terminal",
+        "run_command",
+        "run-command",
+        "ash",
+        "dash",
+        "csh",
+        "tcsh",
+        "busybox",
+    }
+)
 _ARGUMENT_SPLIT = re.compile("[,();|'\"`&>{}\\[\\]!#<=+\\\\\\s]+")
 # ``% ~ ^ * ?`` separate a shell word glued inside a token (``a%bash``,
 # ``a*bash``). On a path they are applied only to the last segment, so an
@@ -412,21 +451,33 @@ def _is_shell_grant(item: str) -> bool:
     An invisible format character may be dropped by one host and read as a
     separator by another, so both readings are judged and either one denies.
     """
-    norm = unicodedata.normalize("NFKC", item).lower()
+    norm = unicodedata.normalize("NFKC", item)
     invalid: ManifestError | None = None
     # Fixed order, every reading judged: a shell grant in any reading wins over
     # an ill-formed one, so the deny reason does not depend on evaluation order.
+    # The lowercase reading is unchanged. The camelCase reading denies only a
+    # whole camel part that is a real launcher, so runCommand, execShell and
+    # HTTPShell are grants, while fishFinder, KshConfig and CmdLine are not.
     # A non-whitespace control character is also read as a space, so NUL cannot
     # hide a shell word; if no reading is a shell grant the rule is ill-formed.
-    readings = [_strip_invisible(norm, " "), _strip_invisible(norm, "")]
+    stripped_forms = [_strip_invisible(norm, " "), _strip_invisible(norm, "")]
     if _has_nonspace_control(norm):
-        readings.append(_strip_invisible(_controls_to_space(norm), " "))
-    for reading in readings:
+        stripped_forms.append(_strip_invisible(_controls_to_space(norm), " "))
+    for stripped in stripped_forms:
+        reading_invalid: ManifestError | None = None
         try:
-            if _reading_grants_shell(reading):
+            if _reading_grants_shell(stripped.lower()):
                 return True
         except ManifestError as exc:
-            invalid = invalid or exc
+            reading_invalid = exc
+        try:
+            if _camel_text_names_launcher(stripped):
+                return True
+        except ManifestError as exc:
+            invalid = invalid or reading_invalid or exc
+        else:
+            if reading_invalid is not None:
+                invalid = invalid or reading_invalid
     if invalid is not None:
         raise invalid
     if _has_nonspace_control(norm):
@@ -529,6 +580,65 @@ def _argument_names_shell(reading: str) -> bool:
     """
     for piece in _ARGUMENT_SPLIT.split(reading):
         if _token_names_shell(piece.strip()):
+            return True
+    return False
+
+
+def _split_case(text: str) -> str:
+    """Insert ``_`` at camelCase, PascalCase and letter/digit boundaries.
+
+    ``runCommand`` reads as ``run_Command``, ``HTTPShell`` as ``HTTP_Shell``
+    and ``x2bash`` as ``x_2_bash``. The separator is one the shell-word match
+    and the tool-name patterns already accept, so the split only adds word
+    boundaries; it never removes one. Words without an inner capital
+    (``Publish``, ``dashboard``) read the same as before. ``evalCode`` and
+    ``sudoRun`` read as ``eval_code`` and ``sudo_run``.
+    """
+    return _CASE_BOUNDARY.sub("_", text)
+
+
+def _camel_parts(text: str) -> list[str]:
+    """Camel parts, lowercased, also split on underscores already in the name."""
+    return [part.lower() for part in _split_case(text).split("_") if part]
+
+
+def _camel_text_names_launcher(text: str) -> bool:
+    """True when a head or argument token has a whole camel part that is a real launcher."""
+    for rule in _split_rules(text):
+        head, _, argument = rule.partition("(")
+        if _camel_token_is_launcher(head.strip()):
+            return True
+        if argument:
+            for piece in _ARGUMENT_SPLIT.split(argument):
+                if _camel_token_is_launcher(piece.strip()):
+                    return True
+    return False
+
+
+def _camel_token_is_launcher(token: str) -> bool:
+    """True when ``token``'s whole camel part is a real launcher.
+
+    ``fish``, ``ksh`` and ``cmd`` do not count here, so ``fishFinder``,
+    ``KshConfig`` and ``CmdLine`` are not grants. ``runCommand`` is a grant
+    because the adjacent parts form ``run_command``. A dotted file name that
+    is not a launcher suffix (``myShell.ts``) is not a tool name.
+    """
+    if not token:
+        return False
+    if "/" in token:
+        token = token.rstrip("/").rsplit("/", 1)[-1]
+    if _MARK_SPLIT.search(token):
+        return any(_camel_token_is_launcher(piece) for piece in _MARK_SPLIT.split(token) if piece)
+    base = _normalize_dots(token.split(":", 1)[0])
+    if any(base.endswith(suffix) for suffix in _LAUNCHER_SUFFIXES):
+        base = _launcher_stem(base)
+    elif "." in base:
+        return False
+    parts = _camel_parts(base)
+    if any(part in _CAMEL_LAUNCHERS for part in parts):
+        return True
+    for left, right in zip(parts, parts[1:]):
+        if f"{left}_{right}" in _CAMEL_LAUNCHERS:
             return True
     return False
 

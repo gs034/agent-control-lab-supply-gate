@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -11,6 +12,28 @@ from supply_gate.manifest import ManifestError, SupplyManifest, parse_manifest
 
 # Structured fields that attempt to waive host verify. Never honoured as policy.
 _BYPASS_KEYS = frozenset({"skip_verify", "waive_verify", "trust_pin_only", "bypass"})
+# Top-level keys the gate understands. Any other key, or a key that is not a
+# string, is envelope_invalid: a shape this gate does not understand is not trusted.
+_ENVELOPE_KEYS = frozenset(
+    {
+        "origin",
+        "expected_sha",
+        "caller",
+        "ref",
+        "capability",
+        "manifest",
+        "untrusted",
+    }
+) | _BYPASS_KEYS
+# Documented UTF-8 byte caps for the string fields. ``ref`` is 4 KiB.
+# A value over its cap is envelope_invalid.
+FIELD_MAX_BYTES: dict[str, int] = {
+    "origin": 2048,
+    "expected_sha": 128,
+    "caller": 256,
+    "ref": 4096,
+    "capability": 256,
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +55,8 @@ class SupplyEnvelope:
         skip_verify_attempt is True when untrusted structured data tries to waive verify.
         """
         skip_attempt = _skip_verify_attempt(raw)
+        if _unknown_or_non_string_key(raw):
+            return None, skip_attempt
         origin = raw.get("origin")
         expected_sha = raw.get("expected_sha")
         caller = raw.get("caller")
@@ -51,6 +76,17 @@ class SupplyEnvelope:
         if ref is not None and not isinstance(ref, str):
             return None, skip_attempt
         if capability is not None and not isinstance(capability, str):
+            return None, skip_attempt
+        if any(
+            isinstance(value, str) and not _text_within_cap(key, value)
+            for key, value in (
+                ("origin", origin),
+                ("expected_sha", expected_sha),
+                ("caller", caller),
+                ("ref", ref),
+                ("capability", capability),
+            )
+        ):
             return None, skip_attempt
 
         origin_n = origin.strip()
@@ -77,6 +113,23 @@ class SupplyEnvelope:
             skip_attempt,
         )
 
+
+
+def _unknown_or_non_string_key(raw: Mapping[str, Any]) -> bool:
+    return any(not isinstance(key, str) or key not in _ENVELOPE_KEYS for key in raw)
+
+
+def _text_within_cap(field: str, value: str) -> bool:
+    """False when ``value`` contains a control, a surrogate, or exceeds its byte cap."""
+    for char in value:
+        category = unicodedata.category(char)
+        if category == "Cc" or category == "Cs":
+            return False
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
+    return size <= FIELD_MAX_BYTES[field]
 
 
 def _skip_verify_attempt(raw: Mapping[str, Any]) -> bool:
