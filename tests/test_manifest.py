@@ -730,6 +730,36 @@ def test_underscore_or_hyphen_keeps_eval_and_su_inside_the_name(value: str) -> N
 
 @pytest.mark.parametrize(
     "value",
+    ["eval", "su", "env", "sudo", "su.exe", "/bin/su"],
+)
+def test_eval_su_env_and_sudo_whole_words_are_denied(value: str) -> None:
+    """Those four words are denied as heads when the whole token is the word."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(.env)",
+        "Read(config/.env.example)",
+        "Read(env.example)",
+        "Read(docs/env/setup.md)",
+        "Read(src/sudo_helper.py)",
+        "Read(docs/su/README.md)",
+        "Read(eval/results.json)",
+        "Read(tests/eval/*)",
+        "Read(a, bash.txt)",
+    ],
+)
+def test_shell_word_inside_a_longer_path_stays_allowed(value: str) -> None:
+    """A shell word matches the whole token or the whole last path segment."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": {"allow": [value]}}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
     [
         "Read(a<bash)",
         "Read(a, [bash])",
@@ -741,6 +771,29 @@ def test_underscore_or_hyphen_keeps_eval_and_su_inside_the_name(value: str) -> N
     ],
 )
 def test_more_argument_marks_and_launch_words_are_denied(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "bash^",
+        "bash~",
+        "bash%",
+        "bash+x",
+        "bash.",
+        "-bash",
+        "Read(a, bash^)",
+        "Read(a, bash~)",
+        "Read(a, bash%)",
+        "Read(a, bash+x)",
+        "Read(a, bash.)",
+        "Read(a, -bash)",
+    ],
+)
+def test_more_marks_stuck_on_a_shell_word_are_denied(value: str) -> None:
+    """A mark glued onto a shell word is the same deny as a top-level ``Bash*``."""
     assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
     assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
 
