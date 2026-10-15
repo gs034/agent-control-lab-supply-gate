@@ -1,6 +1,6 @@
 # Mutation audits
 
-Frozen-suite mutation audits of the PEP test suite, as decided in [ADR-0006](../docs/adr/ADR-0006-frozen-suite-mutation-audit.md). An audit asks one question: for a set of faults specified by someone who has not read the tests, how many does the frozen suite catch, and where is it blind? It does not show that the gate is correct.
+Frozen-suite mutation audits of the supply-gate test suite, using the method of ADR-0006 in the pep sibling repository (`docs/adr/ADR-0006-frozen-suite-mutation-audit.md` there). The harness in `scripts/` is a port of the pep sibling's fixed harness; only the default scope, the default package and one report label differ. An audit asks one question: for a set of faults specified by someone who has not read the tests, how many does the frozen suite catch, and where is it blind? It does not show that the gate is correct.
 
 ## Layout
 
@@ -15,13 +15,13 @@ audits/<id>/
 
 ## Writing a mutant
 
-Each mutant is one change to one file in scope. The default scope is `pep/approval.py`, `pep/gate.py` and `pep/evaluate.py`; `freeze --scope`, repeated, sets another. The file starts with two lines, then a unified diff against the frozen commit:
+Each mutant is one change to one file in scope. The default scope is `supply_gate/gate.py`, `supply_gate/manifest.py` and `supply_gate/update_policy.py`, and the default package is `supply_gate`; `freeze --scope`, repeated, sets another scope. The file starts with two lines, then a unified diff against the frozen commit:
 
 ```
 Intent: what the fault is, in one line
 Property: the fail-closed property it attacks, in one line
---- a/pep/gate.py
-+++ b/pep/gate.py
+--- a/supply_gate/gate.py
++++ b/supply_gate/gate.py
 @@ ...
 ```
 
@@ -30,14 +30,16 @@ The reviewer writes mutants from the code and the ADRs only, without reading `te
 ## Commands
 
 ```
-python scripts/mutation_audit.py freeze <id> --reviewer person [--commit HEAD] [--timeout 300] [--scope pep/x.py ...]
+python scripts/mutation_audit.py freeze <id> --reviewer person [--commit HEAD] [--timeout 300] [--scope supply_gate/x.py ...]
 python scripts/mutation_audit.py run <id>
 python scripts/mutation_audit.py report <id>
 ```
 
 - `freeze` refuses if tracked tests or `pyproject.toml` differ from the commit, if an untracked file sits under `tests/`, if a mutant is malformed, out of scope or does more than edit one file in place (no rename, mode change or second file; `a/` and `b/` prefixes required), if the audit is already frozen, or if the repository is a shallow clone. Commit the mutants and `freeze.json` together, before any run.
-- `run` refuses unless `audits/<id>/` is fully committed, `freeze.json` appears in exactly one commit, no mutant changed after it, and every sealed hash and the Python minor version still match. A shallow clone is refused, because that history check can pass or fail for the wrong reason. It runs the unmutated suite first and aborts if it fails, if it writes no activation record, or if it exits non-zero with no failed test. It extracts a fresh copy of the frozen commit for every mutant, checks that the package under test was imported from that copy, and checks the hashes again after each mutant. The harness self-test is left out of these runs. `git apply` ignores an enclosing repository and system or global git config. The run aborts if applying a patch changed any file other than its target, and if a mutant's suite exits 0 with no activation record. When each suite run ends, its process group is killed. A run that stops early records nothing. Each audit runs once.
+- `run` refuses unless `audits/<id>/` is fully committed, `freeze.json` appears in exactly one commit, no mutant changed after it, and every sealed hash and the Python minor version still match. A shallow clone is refused, because that history check can pass or fail for the wrong reason. The sealed commit must be an ancestor of the commit that added `freeze.json`, and nothing outside `audits/<id>/` may differ between it and that freeze commit, or between it and HEAD, so a branch cannot seal a commit whose code it later reverted. The sealed tree may not carry a `conftest.py` outside `tests/`, a `sitecustomize.py`, a `usercustomize.py` or a `.pth` file, and pytest starts with `python -P`, so the archive root is not on `sys.path` at interpreter start. It runs the unmutated suite first and aborts if it fails, if it writes no activation record, or if it exits non-zero with no failed test. The sealed tree must hold only regular files (no symlink or submodule), no `.gitattributes` file anywhere, and nothing in `audits/<id>/` except the mutants as the freeze commit has them. It extracts a fresh copy of the frozen commit, without `audits/`, for every mutant, checks that the copy is exactly the sealed blobs (same paths, blob ids and executable bits, no extra file), checks that the package under test was imported from that copy, and checks the hashes again after each mutant. The harness self-test is left out of these runs. `git apply` ignores an enclosing repository and system or global git config. The run aborts if applying a patch changed any file other than its target, and if a mutant's suite exits 0 with no activation record. When each suite run ends, its process group is killed. A run that stops early records nothing. Each audit runs once.
 - `report` rewrites `results.md` from `results.json` and `equivalent.json`.
+- Everything committed under `audits/<id>/` is input. `freeze`, `run` and `report` refuse the audit if `audits/`, `audits/<id>/` or `mutants/` is not a real directory, or if `freeze.json`, `results.json`, `results.md`, `equivalent.json` or a file in `mutants/` is a symlink, a special file or a file with more than one hard link. Committed files are read without following links. Outputs are written to a new temporary name in the audit directory, opened through descriptors that do not follow links, synced, then renamed over the old name, so a planted link is replaced, never written through.
+- `run` checks every field it reads back from `freeze.json`: `reviewer` must be one of `person`, `other-family` or `same-family`, `audit_id` and `repair_of` must be audit ids, `python` a version, `package` a dotted name, `timeout_seconds` a positive number, and `scope` and the hash tables single-line paths of at most 256 characters with sha256 digests. `render` refuses a `results.json` header or an `equivalent.json` note that is not one line.
 
 ## Outcomes
 
@@ -64,3 +66,14 @@ A changed line is a `+` line that can raise a line event, in whatever code runs 
 
 - Every survivor that touches a fail-closed path is filed as a defect.
 - Repairs go in separate PRs. A re-run uses a new audit id frozen with `--repair-of <id>` and the same mutant files. Its report says "Repair result on the same set", never a new estimate. A new estimate needs a new, independently specified set.
+
+## Audit 2026-10-14-gate cannot be re-verified
+
+The committed results of `2026-10-14-gate` cannot be re-verified, by this harness or by the one that produced them.
+
+- Its seal (`freeze.json`) names commit `a8de8e41bd7b2cc04a28e4b93a1346e6ce3be389`. That commit is absent from this repository and from origin (`git fetch` reports "not our ref").
+- Its sealed hashes for `pyproject.toml` and the test files match commit `2941253`, from before the branch was rebased. They do not match the merged history: at `3209707`, the parent of the freeze commit, `pyproject.toml` and `tests/test_manifest.py` differ from the seal.
+- `verify` therefore refuses it at every commit, with "the seal's commit a8de8e41bd7b is not a commit in this repository".
+- The harness that ran it was an older copy without the P-1, P-2, P-6 and P-7 fixes (findings S-15 to S-17). It did not check that the sealed commit was the reviewed tree, ran pytest without `-P`, wrote outputs by path, and archived the tree with its `.gitattributes`.
+
+Read its kill rate (9 of 12) and its survivors (M04, M06, M07, which have survivor tests since #27) as indicative only. The data in `audits/2026-10-14-gate/` is left as committed. A re-run of the same twelve mutants under a new audit id, with the fixed harness, is planned.
