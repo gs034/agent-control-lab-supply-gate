@@ -105,3 +105,30 @@ def test_env_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def test_no_fallback_without_config_fail_closed() -> None:
     with pytest.raises(AllowlistError, match="no allowlist"):
         load_allowlist(use_env=False, fallback_builtin=False)
+
+
+HUGE_INT_ALLOWLIST = '{"origins": [' + "9" * 5000 + "]}\n"
+
+
+def test_s14_huge_integer_in_allowlist_file_is_allowlist_error(tmp_path: Path) -> None:
+    """S-14 PoC: a 5000-digit JSON integer raised a bare ValueError from the int conversion limit."""
+    path = tmp_path / "allowlist.json"
+    path.write_text(HUGE_INT_ALLOWLIST, encoding="utf-8")
+    with pytest.raises(AllowlistError, match="ill-formed"):
+        load_allowlist(path=path, use_env=False)
+
+
+def test_s14_huge_integer_allowlist_is_deny_on_direct_evaluate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from supply_gate.gate import evaluate
+    from supply_gate.reasons import DenyReason, Verdict
+
+    path = tmp_path / "allowlist.json"
+    path.write_text(HUGE_INT_ALLOWLIST, encoding="utf-8")
+    monkeypatch.setenv("ACL_SUPPLY_GATE_ALLOWLIST", str(path))
+    pin = "a" * 40
+    envelope = {"origin": ORIGIN_OK, "expected_sha": pin, "caller": "host"}
+    decision = evaluate(envelope, pin, kill_active=False)
+    assert decision.verdict is Verdict.DENY
+    assert DenyReason.ALLOWLIST_INVALID in decision.reasons

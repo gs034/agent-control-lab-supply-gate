@@ -93,7 +93,9 @@ def _origins_from_file(path: Path) -> frozenset[str]:
     if stripped.startswith("{"):
         try:
             parsed = json.loads(text)
-        except (json.JSONDecodeError, RecursionError) as exc:
+        # ValueError covers JSONDecodeError and the int conversion limit on a
+        # huge integer literal (S-14); either is ill-formed host config.
+        except (ValueError, RecursionError) as exc:
             raise AllowlistError("allowlist JSON is ill-formed") from exc
         if not isinstance(parsed, Mapping):
             raise AllowlistError("allowlist JSON must be an object")

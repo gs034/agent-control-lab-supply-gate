@@ -125,7 +125,9 @@ def _mapping_from_file(path: Path) -> Mapping[str, Any]:
         raise UpdatePolicyError("update policy file is empty")
     try:
         parsed = json.loads(text)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    # ValueError covers JSONDecodeError and the int conversion limit on a
+    # huge integer literal (S-14); either is ill-formed host config.
+    except (ValueError, RecursionError) as exc:
         raise UpdatePolicyError("update policy JSON is ill-formed") from exc
     if not isinstance(parsed, Mapping):
         raise UpdatePolicyError("update policy JSON must be an object")

@@ -961,6 +961,9 @@ S9_ADVERSARIAL = [
     "Read(" + "x" * 20_000 + ")",
     "Read(a) " * 1000,
     "a-a:" * 40 + "!",
+    "Read(" + "'a-a:" * 5000 + "!)",
+    "Read(" + "[a\u0301" * 5000 + "!)",
+    "Read(" + "x" * 20_000 + "')",
 ]
 
 
@@ -1006,3 +1009,52 @@ def test_s9_tool_name_scanner_matches_the_previous_pattern() -> None:
         for chars in itertools.product("a:-*?.ex!", repeat=length):
             text = "".join(chars)
             assert _is_argument_tool_name(text) is bool(previous.fullmatch(text)), repr(text)
+
+
+S11_HIDDEN_IN_ARGUMENT = [
+    "Read(x 'Bash')",
+    'Read(x "Bash")',
+    "Read(x `bash`)",
+    "Read(x [bash])",
+    "Read(x {bash})",
+    "Read(x <bash>)",
+    "Read(x ‘bash’)",
+    "Read(x “bash”)",
+    "Read(x «bash»)",
+    "Read(x \x00bash)",
+    "Read(x bash\x7f)",
+    "Read(x \x85bash)",
+    "Read(x bash́)",
+    "Read(x ́bash)",
+    "Read(x ba''sh)",
+    'Read(x b""ash)',
+    "Read(x [b]ash)",
+    "Read(a, 'mcp__desktop-commander')",
+    "Read(x 'bash:*')",
+]
+
+
+@pytest.mark.parametrize("value", S11_HIDDEN_IN_ARGUMENT, ids=range(len(S11_HIDDEN_IN_ARGUMENT)))
+def test_s11_quoted_control_combining_or_bracketed_argument_piece_is_judged(value: str) -> None:
+    """S-11 PoC: ``Read(x 'Bash')`` was ALLOW because a piece with a quote was skipped."""
+    for manifest in ({"allowed-tools": value}, {"permissions": {"allow": [value]}}, {"permissions": [value]}):
+        assert _evaluate(manifest).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _gated({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(notes/bash/*)",
+        "WebFetch(domain:sh.example)",
+        "Read(*)",
+        "Write(cmd.txt)",
+        "Read('notes/readme.md')",
+        'Read("docs/[draft].md")',
+        "Read(café.txt)",
+        "Read(café.txt)",
+        "Read(x 'notes')",
+    ],
+)
+def test_s11_benign_arguments_with_quotes_or_brackets_still_allow(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
