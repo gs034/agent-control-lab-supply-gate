@@ -3,9 +3,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from supply_gate.allowlist import AllowlistError, load_allowlist
 from supply_gate.digest import digest_ok
@@ -14,6 +19,14 @@ from supply_gate.manifest import SupplyManifest
 from supply_gate.origins import origin_allowlisted
 from supply_gate.reasons import REASON_ORDER, DenyReason, Verdict
 from supply_gate.receipt import build_receipt
+
+logger = logging.getLogger(__name__)
+# Logged field values are cut here so a DENY line cannot carry a secret in full.
+_LOG_VALUE_MAX = 64
+# Logged when an origin cannot be reduced to scheme://host[:port] or an scp host.
+_UNPARSEABLE_ORIGIN = "<unparseable-origin>"
+# scp-style ``user[:token]@host:path`` or ``host:path``, with no ``://``.
+_SCP_ORIGIN = re.compile(r"^(?:[^@\s]+@)?(?P<host>[^:@/\s]+):\S+$")
 
 KILL_ENV = "ACL_SUPPLY_GATE_KILL"
 # Kill switch spellings, compared after strip() and lower(). A non-empty value
@@ -125,6 +138,8 @@ def evaluate(
         untrusted_prose_present=prose_present,
         skip_verify_attempt=skip_attempt,
     )
+    if verdict is Verdict.DENY:
+        _log_deny(receipt)
     return Decision(verdict=verdict, reasons=unique, receipt=receipt)
 
 
@@ -153,6 +168,7 @@ def safe_evaluate(
             untrusted_prose_present=False,
             skip_verify_attempt=False,
         )
+        _log_deny(receipt)
         return Decision(verdict=Verdict.DENY, reasons=(DenyReason.KILL_ACTIVE,), receipt=receipt)
 
 
@@ -209,6 +225,84 @@ def _normalize_head(observed_head: str | None) -> str | None:
     if not digest_ok(value):
         return None
     return value
+
+
+def _log_deny(receipt: Mapping[str, Any]) -> None:
+    """One DENY line: reason codes and quoted, truncated field values.
+
+    No receipt body and no secrets. The logged origin is ``scheme://host[:port]``
+    or the host of an scp-style origin. Userinfo, path, query and fragment are
+    dropped. An origin that cannot be reduced that way is logged as
+    ``<unparseable-origin>`` and does not replace the deny reason. Each value
+    is a JSON string, so a space inside it cannot forge another field.
+    """
+    reasons = ",".join(str(reason) for reason in receipt.get("reasons") or ())
+    fields = " ".join(
+        f"{name}={_log_value(_log_field(name, receipt.get(name)))}"
+        for name in ("origin", "expected_sha", "ref", "caller", "capability")
+    )
+    logger.warning("DENY reasons=%s %s", reasons, fields)
+
+
+def _log_field(name: str, value: object) -> object:
+    if name == "origin" and isinstance(value, str):
+        return _strip_origin_userinfo(value)
+    return value
+
+
+def _strip_origin_userinfo(origin: str) -> str:
+    """Reduce an origin to ``scheme://host[:port]``, or the host of an scp-style origin.
+
+    Userinfo, path, query and fragment are dropped. An out-of-range port, a bad
+    IPv6 host, an empty host, or any other origin that cannot be reduced this
+    way is ``<unparseable-origin>``. A parse error is caught here so logging
+    cannot turn the original DENY into ``kill_active``.
+    """
+    try:
+        return _origin_log_target(origin)
+    except ValueError:
+        return _UNPARSEABLE_ORIGIN
+
+
+def _origin_log_target(origin: str) -> str:
+    if "://" in origin:
+        parts = urlsplit(origin)
+        host = parts.hostname
+        port = parts.port
+        if not parts.scheme or not host:
+            return _UNPARSEABLE_ORIGIN
+        if ":" in host:
+            host = f"[{host}]"
+        authority = f"{host}:{port}" if port is not None else host
+        return f"{parts.scheme}://{authority}"
+    matched = _SCP_ORIGIN.fullmatch(origin)
+    if matched is None:
+        return _UNPARSEABLE_ORIGIN
+    return matched.group("host")
+
+
+def _log_value(value: object) -> str:
+    """Quote a logged value. Missing values stay a single dash.
+
+    Control characters and lone surrogates become spaces. The result is a JSON
+    string with non-ASCII escaped, so U+2028, U+2029, bidi overrides
+    (U+202A-U+202E) and bidi isolates (U+2066-U+2069) cannot sit raw in the
+    line, and a space or quote inside the value cannot forge a field such as
+    ``reason=ok``.
+    """
+    if not isinstance(value, str) or value == "":
+        return "-"
+    cleaned: list[str] = []
+    for char in value:
+        category = unicodedata.category(char)
+        if category == "Cc" or category == "Cs":
+            cleaned.append(" ")
+        else:
+            cleaned.append(char)
+    text = "".join(cleaned)
+    if len(text) > _LOG_VALUE_MAX:
+        text = text[:_LOG_VALUE_MAX] + "..."
+    return json.dumps(text, ensure_ascii=True)
 
 
 def _mapping_str(envelope: object, key: str) -> str | None:

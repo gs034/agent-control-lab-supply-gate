@@ -698,6 +698,179 @@ def test_paths_and_domain_rules_inside_arguments_still_allow(value: str) -> None
 @pytest.mark.parametrize(
     "value",
     [
+        "Read(/bin/sh)",
+        "Read(./sh)",
+        "Read(a,/bin/bash)",
+        "Read('sh')",
+        'Read("bash")',
+        "Read(`bash`)",
+        "Read(x&&bash)",
+        "Read(a>bash)",
+        "Read(a{bash})",
+        "Read(bash\\)",
+        "Read(a, eval)",
+        "Read(a, su)",
+    ],
+)
+def test_quoted_path_and_operator_forms_inside_arguments_are_denied(value: str) -> None:
+    """Quotes, path tails and shell operators cannot hide a shell word inside an argument."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["eval_runner", "run_eval", "mcp__lab__eval", "su-docs"],
+)
+def test_underscore_or_hyphen_keeps_eval_and_su_inside_the_name(value: str) -> None:
+    """eval and su do not treat underscore or hyphen as a word break."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": f"Read(a, {value})"}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["eval", "su", "env", "sudo", "su.exe", "/bin/su"],
+)
+def test_eval_su_env_and_sudo_whole_words_are_denied(value: str) -> None:
+    """Those four words are denied as heads when the whole token is the word."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(.env)",
+        "Read(config/.env.example)",
+        "Read(env.example)",
+        "Read(docs/env/setup.md)",
+        "Read(src/sudo_helper.py)",
+        "Read(docs/su/README.md)",
+        "Read(eval/results.json)",
+        "Read(tests/eval/*)",
+        "Read(src/*.py)",
+        "Read(a, bash.txt)",
+        "src/env/config.py",
+        "Read(src/env/config.py)",
+        "docs/su/x",
+        "Read(docs/su/x)",
+        "eval.py",
+        "Read(eval.py)",
+        "eval/",
+        "Read(eval/)",
+        "Read(a, eval/)",
+        "src/env/",
+        "src/eval/",
+        "Read(src/env/)",
+        "Read(src/eval/)",
+        "Read(a, src/env/)",
+        "Read(a, src/eval/)",
+        "Read(scripts/run.cmd)",
+        "build.bat",
+        "docs/-su",
+    ],
+)
+def test_shell_word_inside_a_longer_path_stays_allowed(value: str) -> None:
+    """A shell word matches the whole token or the whole last path segment."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": {"allow": [value]}}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(a<bash)",
+        "Read(a, [bash])",
+        "Read(a, !bash)",
+        "Read(a, bash#x)",
+        "Read(a, /bin/sh/)",
+        "Read(a, env)",
+        "Read(a, sudo)",
+        "doas",
+        "xargs",
+        "nohup",
+        "Read(a, doas)",
+        "Read(a, xargs)",
+        "Read(a, nohup)",
+        "bash.cmd",
+        "sh.bat",
+        "Read(a, bash.cmd)",
+        "Read(a, sh.bat)",
+        "-su",
+        "--eval",
+        "Read(a, -su)",
+        "Read(a, --eval)",
+        "mcp__x__run(eval:*)",
+        "mcp__x__run(sudo:*)",
+        "mcp__x__run(xargs:*)",
+        "Read(su:*)",
+        "Read(env:*)",
+        "Read(nohup:*)",
+        "Read(bash.ps1)",
+        "Read(sh.com)",
+        "Read(=bash)",
+        "Read(--exec=bash)",
+        "Read(a+bash)",
+        "/usr/bin/doas",
+        "xargs.exe",
+        "Read(a%bash)",
+        "a~bash",
+        "a^bash",
+        "a*bash",
+        "a?bash",
+        "Read(a~bash)",
+        "Read(a^bash)",
+        "Read(a*bash)",
+        "Read(a?bash)",
+        "bash..exe",
+        "Read(bash..exe)",
+        "bash.exe.",
+        "Read(bash.exe.)",
+        "Read(a\x00bash)",
+        "bash\x00",
+    ],
+)
+def test_more_argument_marks_and_launch_words_are_denied(value: str) -> None:
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Read(notes\x01.py)", "Read(\x7f)", "file\x01.txt"],
+)
+def test_control_characters_in_rule_text_are_invalid(value: str) -> None:
+    """A control character that does not reveal a shell word makes the rule ill-formed."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.ENVELOPE_INVALID,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "bash^",
+        "bash~",
+        "bash%",
+        "bash+x",
+        "bash.",
+        "-bash",
+        "Read(a, bash^)",
+        "Read(a, bash~)",
+        "Read(a, bash%)",
+        "Read(a, bash+x)",
+        "Read(a, bash.)",
+        "Read(a, -bash)",
+    ],
+)
+def test_more_marks_stuck_on_a_shell_word_are_denied(value: str) -> None:
+    """A mark glued onto a shell word is the same deny as a top-level ``Bash*``."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
         "Read(*)",
         "Edit(scripts/**/*.sh)",
         "Grep(?)",
@@ -824,6 +997,64 @@ def test_camel_case_names_without_a_shell_word_still_allow(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
 
 
+@pytest.mark.parametrize("value", ["evalCode", "sudoRun"])
+def test_camel_case_eval_and_sudo_compounds_stay_allowed(value: str) -> None:
+    """evalCode and sudoRun read as eval_code and sudo_run, not as the whole words."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": f"Read(a, {value})"}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": {"allow": [value]}}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize("value", ["runCommand", "execShell", "HTTPShell"])
+def test_camel_case_shell_compounds_stay_denied(value: str) -> None:
+    """runCommand, execShell and HTTPShell stay shell grants after the case split."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["readBashHistory", "terminalWidth"])
+def test_camel_case_shell_word_inside_a_longer_name_is_refused(value: str) -> None:
+    """readBashHistory and terminalWidth are refused as a fail-safe side effect of the split."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["fishFinder", "KshConfig", "CmdLine"])
+def test_camel_part_that_is_not_a_real_launcher_stays_allowed(value: str) -> None:
+    """cmd, ksh and fish are not grants when they are an earlier camel segment."""
+    assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+    assert _evaluate({"allowed-tools": f"Read(a, {value})"}).verdict is Verdict.ALLOW
+    assert _evaluate({"permissions": {"allow": [value]}}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "runCmd",
+        "runCMD",
+        "mcp__x__runCmd",
+        "mcp__x__runCMD",
+        "startKsh",
+        "startKSH",
+        "openFish",
+        "openFISH",
+        "Read(a, runCmd)",
+        "Read(a, runCMD)",
+        "Read(a, startKsh)",
+        "Read(a, openFish)",
+    ],
+)
+def test_camel_last_segment_cmd_ksh_fish_is_denied(value: str) -> None:
+    """The last camel segment is compared case-insensitively, so runCMD is denied and CmdLine is not."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _evaluate({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+@pytest.mark.parametrize("value", ["fish", "ksh", "cmd", "Fish", "Ksh", "Cmd"])
+def test_shell_name_alone_stays_denied(value: str) -> None:
+    """A head that is only fish, ksh or cmd is still a shell grant."""
+    assert _evaluate({"allowed-tools": value}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
 # S-7: harness shared by the gated-path tests below.
 GATED_ORIGIN = "https://git.example.invalid/x.git"
 GATED_HEAD = "a" * 40
@@ -844,7 +1075,7 @@ def _gated(manifest: dict[str, object], observed_mcp_servers: object = None):
 
 
 def test_s7_source_entry_with_launch_fields_is_invalid_on_the_gated_path() -> None:
-    """S-7 PoC: args, env and cwd on a source entry changed what runs but not the observation key."""
+    """S-7: args, env and cwd on a source entry changed what runs but not the observation key."""
     server = {
         "source": "pkg-mcp",
         "args": ["--allow-shell"],
@@ -877,7 +1108,14 @@ def test_s7_launch_field_without_a_command_is_invalid(extra: dict) -> None:
 def test_s7_plain_source_entry_and_command_entry_still_allow() -> None:
     plain = {"source": "pkg-mcp", "pin": SERVER_PIN}
     assert _gated({"mcp_servers": [plain]}, {"pkg-mcp": SERVER_PIN}).verdict is Verdict.ALLOW
-    command = {"source": "pkg-mcp", "command": "npx", "args": ["-y", "m"], "env": {"A": "1"}, "cwd": "/w", "pin": SERVER_PIN}
+    command = {
+        "source": "pkg-mcp",
+        "command": "npx",
+        "args": ["-y", "m"],
+        "env": {"A": "1"},
+        "cwd": "/w",
+        "pin": SERVER_PIN,
+    }
     observed = {mcp_observation_key(command): SERVER_PIN}
     assert _gated({"mcp_servers": [command]}, observed).verdict is Verdict.ALLOW
 
@@ -921,7 +1159,7 @@ def test_s7_url_and_command_without_a_type_is_invalid() -> None:
     ],
 )
 def test_s8_mcp_server_wide_grant_is_a_shell_preapproval(value: str) -> None:
-    """S-8 PoC: ``mcp__<server>`` with no tool segment pre-approves every tool on that server."""
+    """S-8: ``mcp__<server>`` with no tool segment pre-approves every tool on that server."""
     for manifest in ({"permissions": {"allow": [value]}}, {"allowed-tools": value}, {"permissions": [value]}):
         assert _evaluate(manifest).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
     decision = _gated({"permissions": {"allow": [value]}})
@@ -980,6 +1218,19 @@ def test_s9_adversarial_argument_text_evaluates_quickly(value: str) -> None:
         assert elapsed < 0.5, f"{elapsed:.3f}s"
 
 
+def test_s9_slow_case_at_n_5000_finishes_quickly() -> None:
+    """The old tool-name regex took 12.4 s at n=26. n=5000 must finish well under 1 s."""
+    import time
+
+    value = "Read(" + "a-a:" * 5000 + "!)"
+    for manifest in ({"allowed-tools": value}, {"permissions": {"allow": [value]}}):
+        start = time.perf_counter()
+        decision = _evaluate(manifest)
+        elapsed = time.perf_counter() - start
+        assert decision.verdict is Verdict.ALLOW
+        assert elapsed < 1.0, f"{elapsed:.3f}s"
+
+
 def test_s9_overlap_case_keeps_its_verdict() -> None:
     assert _evaluate({"allowed-tools": "Read(" + "a-a:" * 40 + "!)"}).verdict is Verdict.ALLOW
     assert _evaluate({"allowed-tools": "Read(" + "a-a:" * 40 + "bash)"}).reasons == (
@@ -997,8 +1248,8 @@ def test_s9_long_argument_piece_is_judged_by_shell_words_alone() -> None:
     assert _evaluate({"allowed-tools": long_benign}).verdict is Verdict.ALLOW
 
 
-def test_s9_tool_name_scanner_matches_the_previous_pattern() -> None:
-    """Every string up to length 5 over the pattern's alphabet is accepted exactly as before."""
+def test_s9_tool_name_scanner_matches_the_previous_exe_pattern() -> None:
+    """Strings over the old alphabet still match the ``.exe`` pattern, with no backtracking."""
     import itertools
     import re
 
@@ -1058,3 +1309,67 @@ def test_s11_quoted_control_combining_or_bracketed_argument_piece_is_judged(valu
 )
 def test_s11_benign_arguments_with_quotes_or_brackets_still_allow(value: str) -> None:
     assert _evaluate({"allowed-tools": value}).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["bash.cmd", "sh.bat", "bash.ps1", "sh.com", "bash.cmd.exe", "a.cmd", "notbash.com"],
+)
+def test_s9_scanner_accepts_extra_launcher_suffixes(name: str) -> None:
+    from supply_gate.manifest import _is_argument_tool_name
+
+    assert _is_argument_tool_name(name) is True
+
+
+def test_s9_tool_name_scanner_matches_the_previous_pattern() -> None:
+    """Every string up to length 5 over the pattern's alphabet is accepted exactly as before."""
+    import itertools
+    import re
+
+    from supply_gate.manifest import _is_argument_tool_name
+
+    previous = re.compile(r"[a-z0-9_:@]+(?:\.exe|-[a-z0-9_:@]+|:[a-z0-9_@*?]+)*")
+    for length in range(6):
+        for chars in itertools.product("a:-*?.ex!", repeat=length):
+            text = "".join(chars)
+            assert _is_argument_tool_name(text) is bool(previous.fullmatch(text)), repr(text)
+
+
+def _assert_shell_grant(value: str) -> None:
+    for manifest in ({"allowed-tools": value}, {"permissions": {"allow": [value]}}, {"permissions": [value]}):
+        assert _evaluate(manifest).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+    assert _gated({"permissions": {"allow": [value]}}).reasons == (DenyReason.SKILL_SHELL_PREAPPROVED,)
+
+
+def test_modifier_letter_apostrophe_hides_a_shell_word() -> None:
+    """U+02BC MODIFIER LETTER APOSTROPHE is a handled mark, so ``Read(x ʼbashʼ)`` is DENY."""
+    _assert_shell_grant("Read(x \u02bcbash\u02bc)")
+
+
+def test_backslash_inside_an_argument_splits_a_shell_word() -> None:
+    """``Read(x ba\\sh)`` splits on the backslash and the ``sh`` piece is DENY."""
+    _assert_shell_grant("Read(x ba\\sh)")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Read(x b\u0430sh)",  # Cyrillic а → bash
+        "Read(x b\u0410sh)",  # Cyrillic А lowercases to а, then maps to bash
+        "Read(x \u0435xec)",  # Cyrillic е → exec
+        "Read(x n\u043ehup)",  # Cyrillic о → nohup
+        "Read(x \u0441md)",  # Cyrillic с → cmd
+        "Read(x \u0440wsh)",  # Cyrillic р → pwsh
+        "Read(x \u0445args)",  # Cyrillic х → xargs
+        "Read(x \u0455h)",  # Cyrillic ѕ → sh
+        "Read(x s\u04bb)",  # Cyrillic һ → sh
+        "Read(x \u02bcb\u0430sh\u02bc)",  # U+02BC around a confusable bash
+    ],
+)
+def test_cyrillic_confusable_in_an_argument_is_a_shell_word(value: str) -> None:
+    """Cyrillic look-alikes of Latin letters are mapped before the shell-word match."""
+    _assert_shell_grant(value)
+
+
+def test_cyrillic_confusable_that_is_not_a_shell_word_stays_allowed() -> None:
+    assert _evaluate({"allowed-tools": "Read(x d\u0430ta)"}).verdict is Verdict.ALLOW
